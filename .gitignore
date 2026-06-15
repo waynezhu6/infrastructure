@@ -1,0 +1,14 @@
+# Environment files
+.env
+
+# Don't commit built frontend files (deploy separately)
+sites/*/
+!sites/.gitkeep
+!sites/todo/index.html
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db

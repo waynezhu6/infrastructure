@@ -1,0 +1,32 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write env file
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_DEPLOY_KEY }}
+          script: |
+            echo "POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" > /opt/apps/infrastructure/.env
+
+      - name: Pull and reload
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_DEPLOY_KEY }}
+          script: |
+            cd /opt/apps/infrastructure
+            git pull
+            docker compose up -d
+            docker exec caddy caddy reload --config /etc/caddy/Caddyfile
