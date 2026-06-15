@@ -100,10 +100,20 @@ networks:
 
 **Each project repo** — on merge to `main`:
 
-- Backend: `docker build` → push to `ghcr.io/you/project-backend:latest` → SSH → `docker compose pull && docker compose up -d`
+- Backend: `docker build` → push to `ghcr.io/you/project-backend:latest` → SSH → clone-or-pull → `docker compose up -d`
 - Frontend: `npm run build` → `rsync dist/ user@server:~/infrastructure/sites/myapp/`
 
 Both need `SSH_DEPLOY_KEY` as a GitHub Actions secret — generate a key pair, add the public key to `~/.ssh/authorized_keys` on the server.
+
+Pipelines use a clone-or-pull pattern so no manual server bootstrap is needed:
+
+```bash
+if [ -d ~/myapp ]; then
+  git -C ~/myapp pull
+else
+  git clone https://github.com/you/myapp.git ~/myapp
+fi
+```
 
 ## Common Commands
 

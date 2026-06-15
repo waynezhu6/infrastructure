@@ -17,8 +17,12 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_DEPLOY_KEY }}
           script: |
+            if [ -d ~/infrastructure ]; then
+              git -C ~/infrastructure pull
+            else
+              git clone https://github.com/waynezhu6/infrastructure.git ~/infrastructure
+            fi
             echo "POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" > ~/infrastructure/.env
             cd ~/infrastructure
-            git pull
             docker compose up -d
             docker exec caddy caddy reload --config /etc/caddy/Caddyfile
