@@ -5,7 +5,7 @@ Shared Docker infrastructure for a personal Oracle VPS. Runs Caddy (reverse prox
 ## Layout
 
 ```
-/opt/apps/
+~/
 ├── infrastructure/       ← this repo
 │   ├── docker-compose.yml
 │   ├── Caddyfile
@@ -21,8 +21,8 @@ Shared Docker infrastructure for a personal Oracle VPS. Runs Caddy (reverse prox
 ## Initial Server Setup
 
 ```bash
-git clone <this repo> /opt/apps/infrastructure
-cd /opt/apps/infrastructure
+git clone <this repo> ~/infrastructure
+cd ~/infrastructure
 
 # Create the env file with a secure postgres password
 echo "POSTGRES_PASSWORD=$(openssl rand -base64 32)" > .env
@@ -101,7 +101,7 @@ networks:
 **Each project repo** — on merge to `main`:
 
 - Backend: `docker build` → push to `ghcr.io/you/project-backend:latest` → SSH → `docker compose pull && docker compose up -d`
-- Frontend: `npm run build` → `rsync dist/ user@server:/opt/apps/infrastructure/sites/myapp/`
+- Frontend: `npm run build` → `rsync dist/ user@server:~/infrastructure/sites/myapp/`
 
 Both need `SSH_DEPLOY_KEY` as a GitHub Actions secret — generate a key pair, add the public key to `~/.ssh/authorized_keys` on the server.
 
