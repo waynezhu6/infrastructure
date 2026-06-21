@@ -1,6 +1,6 @@
 # Infrastructure
 
-Shared Docker infrastructure for a personal Oracle VPS. Runs Caddy (reverse proxy + HTTPS) and PostgreSQL, with isolated Docker networks that project containers attach to.
+This repo is the infrastructure boilerplate for my personal server (currently using an Oracle free-tier VPS). It runs Caddy as an HTTPS-enforcing reverse proxy, with isolated Docker networks that indvididual project containers can attach to. Global resources are also defined at this layer (currently only Postgres)
 
 ## Layout
 
@@ -12,26 +12,13 @@ Shared Docker infrastructure for a personal Oracle VPS. Runs Caddy (reverse prox
 │   └── sites/
 │       └── myapp/        ← built frontend files, written by each project's CI
 │
-└── myapp/                ← project repo (separate)
+└── myapp/                ← individual project repo (separate)
     └── docker-compose.yml
 ```
 
-`sites/` is not tracked in this repo — it lives only on the server and is populated by each project's CI pipeline.
+Note that `sites/` is not actually tracked in this repo; instead it represents local copies of each individual project repo, which should be  populated and updated by each individual project's CI pipeline.
 
-## Initial Server Setup
-
-```bash
-git clone <this repo> ~/infrastructure
-cd ~/infrastructure
-
-# Create the env file with a secure postgres password
-echo "POSTGRES_PASSWORD=$(openssl rand -base64 32)" > .env
-
-# Update Caddyfile with your real domain, then:
-docker compose up -d
-```
-
-Secrets (`POSTGRES_PASSWORD` etc.) are stored in GitHub Actions and written to `.env` on the server by this repo's own CI pipeline on every deploy.
+Global secrets (`POSTGRES_PASSWORD` etc.) are stored in GitHub Actions and written to `.env` on the server by this repo's own CI pipeline on every deploy.
 
 ## Adding a New Project
 
@@ -53,7 +40,7 @@ myapp.yourdomain.com {
 }
 ```
 
-Merging to `main` triggers this repo's CI, which reloads Caddy on the server automatically.
+Merging to `main` triggers CI which will rebuild all services defined in docker-compose.yml (currently only Caddy and Postgres) and restart them to pick up any changes.
 
 **2. Database** — create the DB and user directly on the server (database lifecycle is owned by each project):
 
@@ -137,12 +124,4 @@ docker exec -it postgres psql -U postgres
 
 # Backup
 docker exec postgres pg_dumpall -U postgres > backup-$(date +%Y%m%d).sql
-```
-
-## DNS
-
-Point A records to the VPS IP. Caddy handles HTTPS automatically via Let's Encrypt.
-
-```
-A  myapp.yourdomain.com  →  VPS_IP
 ```
