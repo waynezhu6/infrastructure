@@ -46,6 +46,10 @@ for f in apps/*.caddy; do
     psql -c "CREATE DATABASE \"$ident\" OWNER \"$ident\""
     echo "Created database $ident"
   fi
+  # Postgres lets every role connect to every database by default. Only the
+  # owning app should reach its own. Re-applied each run, so older databases
+  # get it too.
+  psql -c "REVOKE CONNECT, TEMPORARY ON DATABASE \"$ident\" FROM PUBLIC"
 
   if [ ! -f "$env_file" ]; then
     (umask 077; printf 'DATABASE_URL=postgres://%s:%s@postgres:5432/%s\n' "$ident" "$password" "$ident" > "$env_file")
