@@ -1,10 +1,12 @@
 # Environment files
 .env
 
+# Per-app database credentials, generated on the server
+secrets/
+
 # Don't commit built frontend files (deploy separately)
 sites/*/
 !sites/.gitkeep
-!sites/todo/index.html
 
 # Logs
 *.log

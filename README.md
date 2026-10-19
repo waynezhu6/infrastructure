@@ -6,19 +6,20 @@ This repo is the infrastructure boilerplate for my personal server (currently us
 
 ```
 ~/
-├── infrastructure/       ← this repo
-│   ├── docker-compose.yml
-│   ├── Caddyfile
+├── infrastructure/           ← this repo, copied over by its Deploy workflow
+│   ├── docker-compose.yml    ← Caddy + Postgres
+│   ├── Caddyfile             ← global options; imports apps/*.caddy
+│   ├── apps/
+│   │   └── myapp.caddy       ← one site block per registered app
+│   ├── scripts/              ← register-app.sh, provision-dbs.sh, app-env.sh
+│   ├── secrets/              ← NOT in git; generated per-app DATABASE_URLs
 │   └── sites/
-│       └── myapp/        ← built frontend files, written by each project's CI
+│       └── myapp/            ← NOT in git; built frontend, written by the app's CI
 │
-└── myapp/                ← individual project repo (separate)
-    └── docker-compose.yml
+└── myapp/                    ← the app's docker-compose.yml and .env, written by its CI
 ```
 
-Note that `sites/` is not actually tracked in this repo; instead it represents local copies of each individual project repo, which should be  populated and updated by each individual project's CI pipeline.
-
-Global secrets (`POSTGRES_PASSWORD` etc.) are stored in GitHub Actions and written to `.env` on the server by this repo's own CI pipeline on every deploy.
+Global secrets (`POSTGRES_PASSWORD`) are stored in GitHub Actions and written to `.env` on the server on every deploy. Per-app database passwords are generated on the server and never leave it.
 
 ## Setting Up a New Server
 
@@ -29,7 +30,7 @@ Caddy and Postgres run in containers, so the host only needs Docker, git and a d
 - Create an instance with a Canonical Ubuntu image (Ampere/arm64 works).
 - In the instance's VCN, open the subnet's security list and add ingress rules from `0.0.0.0/0` for TCP 80, TCP 443 and UDP 443. The host firewall is handled by the script; this cloud-level firewall is not.
 
-**2. Point DNS at it.** Create an `A` record for each site domain in the Caddyfile (e.g. `todo.example.com`) pointing at the server's public IP. Caddy can't get HTTPS certificates until these resolve.
+**2. Point DNS at it.** Create an `A` record for each app's domain (e.g. `notes.example.com`) pointing at the server's public IP. Caddy can't get HTTPS certificates until these resolve.
 
 **3. Make a deploy key** on your own machine. This one key pair is what every repo's CI uses to SSH in:
 
@@ -73,72 +74,33 @@ cd ~/infrastructure && make health
 
 ## Adding a New Project
 
-**1. Caddyfile** — open a PR adding a site block:
+Projects start from [app-template](https://github.com/waynezhu6/app-template). Registering one is a PR to this repo:
 
-```caddy
-myapp.yourdomain.com {
-    root * /srv/myapp
-
-    handle /api/* {
-        reverse_proxy myapp-backend:3002
-    }
-
-    handle {
-        encode gzip zstd
-        try_files {path} {path}/ /index.html
-        file_server
-    }
-}
-```
-
-Merging to `main` triggers CI which will rebuild all services defined in docker-compose.yml (currently only Caddy and Postgres) and restart them to pick up any changes.
-
-**2. Database** — create the DB and user directly on the server (database lifecycle is owned by each project):
+**1. Register it.** Either run Actions → **Register app** → Run workflow with the app's repo name (lowercase) and domain, or run it locally and open the PR yourself:
 
 ```bash
-docker exec -it postgres psql -U postgres
+scripts/register-app.sh notes notes.example.com
 ```
 
-```sql
-CREATE DATABASE myapp_db;
-CREATE USER myapp_user WITH PASSWORD 'secure_password';
-GRANT ALL PRIVILEGES ON DATABASE myapp_db TO myapp_user;
-\c myapp_db
-GRANT ALL ON SCHEMA public TO myapp_user;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO myapp_user;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO myapp_user;
-```
+Either way the result is one new file, `apps/notes.caddy`, routing the domain to `/srv/notes` (the frontend) and `notes-backend:3001` (the backend container). The workflow needs Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests" ticked once.
 
-**3. Project docker-compose.yml** — attach to infrastructure networks:
+**2. Merge the PR.** The Deploy workflow validates the Caddy config, reloads Caddy, and runs `scripts/provision-dbs.sh`, which creates a `notes` role and database with a generated password and stores its `DATABASE_URL` in `~/infrastructure/secrets/notes.env`. (Dashes in names become underscores in Postgres: `my-app` → `my_app`.)
 
-```yaml
-services:
-  myapp-backend:
-    image: ghcr.io/you/myapp-backend:latest
-    container_name: myapp-backend
-    restart: unless-stopped
-    environment:
-      - DATABASE_URL=postgresql://myapp_user:secure_password@postgres:5432/myapp_db
-      - NODE_ENV=production
-      - PORT=3002
-    networks:
-      - caddy-web
-      - postgres-db
+**3. Point DNS** for the domain at the server.
 
-networks:
-  caddy-web:
-    external: true
-  postgres-db:
-    external: true
-```
+**4. Set the app repo's secrets**: `SERVER_HOST`, `SERVER_USER`, `SSH_DEPLOY_KEY`. No database secret: the app's deploy reads it from the server with `scripts/app-env.sh <name>`, and fails with a clear message if the app isn't registered yet.
+
+Then push to the app's `main`.
+
+**Removing a project**: delete `apps/<name>.caddy` by PR. On deploy Caddy stops serving it. The database, `secrets/<name>.env`, `sites/<name>` and `~/<name>` are left in place on purpose; remove them by hand once you're sure (`docker exec -it postgres psql -U postgres -c 'DROP DATABASE <name>'` etc.).
 
 ## CI/CD
 
-**This repo**: on merge to `main`, CI copies the repo's files to `~/infrastructure` with rsync, writes `.env`, runs `docker compose up -d` and reloads Caddy. Secrets stored in GitHub Actions: `SERVER_HOST`, `SERVER_USER`, `SSH_DEPLOY_KEY`, `POSTGRES_PASSWORD`.
+**This repo**: on merge to `main`, CI copies the repo's files to `~/infrastructure` with rsync, writes `.env`, runs `docker compose up -d`, creates any missing app databases and reloads Caddy. Secrets stored in GitHub Actions: `SERVER_HOST`, `SERVER_USER`, `SSH_DEPLOY_KEY`, `POSTGRES_PASSWORD`.
 
 **Each project repo**: on merge to `main`:
 
-- Backend: `docker build` → push to `ghcr.io/<owner>/<app>-backend:latest` → copy `docker-compose.yml` and `.env` to `~/<app>` → `docker compose pull && up -d`
+- Backend: `docker build` → push to `ghcr.io/<owner>/<app>-backend:latest` → copy `docker-compose.yml` and `.env` to `~/<app>`, append `scripts/app-env.sh <app>` → `docker compose pull && up -d`
 - Frontend: `npm run build` → `rsync dist/ user@server:~/infrastructure/sites/<app>/`
 
 Both need `SSH_DEPLOY_KEY` as a GitHub Actions secret. Its public half goes in the deploy user's `~/.ssh/authorized_keys` (bootstrap's `--pubkey` does this).
@@ -147,6 +109,7 @@ The server never runs `git clone` or `git pull`; CI pushes files to it. So the s
 
 - Don't edit files under `~/infrastructure` on the server; the next deploy overwrites them. Make changes by PR.
 - The rsync doesn't delete anything, so `.env`, `sites/` and anything else you keep there survive deploys. A file removed from this repo stays on the server until you delete it by hand.
+- `apps/` is the exception: it's mirrored exactly (`--delete`), so removing an app's file unregisters it.
 - Files are written in place (`--inplace`), so Caddy's single-file mount of the Caddyfile sees the new version on `caddy reload`.
 
 To pull a repo by hand on the server (for debugging, say), use SSH agent forwarding rather than storing a token there: add `ForwardAgent yes` for the server in your laptop's `~/.ssh/config`, and use `git@github.com:` remotes.
@@ -166,7 +129,7 @@ docker compose logs -f caddy
 docker exec caddy caddy reload --config /etc/caddy/Caddyfile
 
 # Validate Caddyfile
-docker run --rm -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
+docker run --rm -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile -v $(pwd)/apps:/etc/caddy/apps caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
 
 # PostgreSQL
 docker exec -it postgres psql -U postgres
