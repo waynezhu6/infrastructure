@@ -5,25 +5,52 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy
-        uses: appleboy/ssh-action@v1
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_DEPLOY_KEY }}
-          script: |
-            if [ -d ~/infrastructure ]; then
-              git -C ~/infrastructure pull
-            else
-              git clone https://github.com/waynezhu6/infrastructure.git ~/infrastructure
-            fi
-            echo "POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" > ~/infrastructure/.env
+          ssh-private-key: ${{ secrets.SSH_DEPLOY_KEY }}
+
+      - name: Add server to known hosts
+        run: ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+
+      # The server never talks to GitHub: CI copies the checked-out files over.
+      # --inplace rewrites files without replacing them, so Caddy's single-file
+      # bind mount of the Caddyfile sees the new contents on reload.
+      # No --delete, so server-only files (.env, sites/, backups) are never removed.
+      - name: Copy files to server
+        env:
+          TARGET: ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
+        run: |
+          ssh "$TARGET" "mkdir -p ~/infrastructure"
+          rsync -rlptz --inplace \
+            --exclude=.git/ --exclude=.github/ --exclude=.env --exclude='sites/*/' \
+            ./ "$TARGET:~/infrastructure/"
+
+      - name: Write .env
+        env:
+          TARGET: ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          umask 077
+          printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD" > deploy.env
+          scp deploy.env "$TARGET:~/infrastructure/.env"
+
+      - name: Start services and reload Caddy
+        env:
+          TARGET: ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
+        run: |
+          ssh "$TARGET" 'set -e
             cd ~/infrastructure
+            chmod 600 .env
             docker compose up -d
-            docker exec caddy caddy reload --config /etc/caddy/Caddyfile
+            docker exec caddy caddy reload --config /etc/caddy/Caddyfile'

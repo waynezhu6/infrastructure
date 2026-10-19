@@ -44,7 +44,7 @@ scp bootstrap.sh ubuntu@<server-ip>:
 ssh ubuntu@<server-ip> 'sudo bash bootstrap.sh --user ubuntu --pubkey "'"$(cat deploy_key.pub)"'"'
 ```
 
-It installs Docker Engine with the compose plugin, adds the user to the `docker` group, authorizes the deploy key, opens 80/443 in the host firewall (Oracle's Ubuntu images block them with iptables by default) and creates `~/infrastructure/sites/` owned by the deploy user. It does not clone this repo; the Deploy workflow does that.
+It installs Docker Engine with the compose plugin, adds the user to the `docker` group, authorizes the deploy key, opens 80/443 in the host firewall (Oracle's Ubuntu images block them with iptables by default) and creates `~/infrastructure/sites/` owned by the deploy user. It does not need this repo on the server: the Deploy workflow copies the files over, so the server never needs GitHub credentials.
 
 To let the server pull private app images from GHCR, also pass `--ghcr-user` and pipe in a token. Create a classic personal access token with only the `read:packages` scope (GitHub → Settings → Developer settings → Personal access tokens) and save it to a file, e.g. `ghcr_token`. The script reads it from stdin so it never appears on a command line, and logs the deploy user in to `ghcr.io` once. App repos then need no registry credentials of their own.
 
@@ -134,24 +134,22 @@ networks:
 
 ## CI/CD
 
-**This repo** — on merge to `main`, the pipeline writes `.env` and reloads Caddy. Secrets stored in GitHub Actions: `SERVER_HOST`, `SERVER_USER`, `SSH_DEPLOY_KEY`, `POSTGRES_PASSWORD`.
+**This repo**: on merge to `main`, CI copies the repo's files to `~/infrastructure` with rsync, writes `.env`, runs `docker compose up -d` and reloads Caddy. Secrets stored in GitHub Actions: `SERVER_HOST`, `SERVER_USER`, `SSH_DEPLOY_KEY`, `POSTGRES_PASSWORD`.
 
-**Each project repo** — on merge to `main`:
+**Each project repo**: on merge to `main`:
 
-- Backend: `docker build` → push to `ghcr.io/you/project-backend:latest` → SSH → clone-or-pull → `docker compose up -d`
-- Frontend: `npm run build` → `rsync dist/ user@server:~/infrastructure/sites/myapp/`
+- Backend: `docker build` → push to `ghcr.io/<owner>/<app>-backend:latest` → copy `docker-compose.yml` and `.env` to `~/<app>` → `docker compose pull && up -d`
+- Frontend: `npm run build` → `rsync dist/ user@server:~/infrastructure/sites/<app>/`
 
-Both need `SSH_DEPLOY_KEY` as a GitHub Actions secret — generate a key pair, add the public key to `~/.ssh/authorized_keys` on the server.
+Both need `SSH_DEPLOY_KEY` as a GitHub Actions secret. Its public half goes in the deploy user's `~/.ssh/authorized_keys` (bootstrap's `--pubkey` does this).
 
-Pipelines use a clone-or-pull pattern so no manual server bootstrap is needed:
+The server never runs `git clone` or `git pull`; CI pushes files to it. So the server holds no GitHub credentials beyond the read-only GHCR login. A few things follow from that:
 
-```bash
-if [ -d ~/myapp ]; then
-  git -C ~/myapp pull
-else
-  git clone https://github.com/you/myapp.git ~/myapp
-fi
-```
+- Don't edit files under `~/infrastructure` on the server; the next deploy overwrites them. Make changes by PR.
+- The rsync doesn't delete anything, so `.env`, `sites/` and anything else you keep there survive deploys. A file removed from this repo stays on the server until you delete it by hand.
+- Files are written in place (`--inplace`), so Caddy's single-file mount of the Caddyfile sees the new version on `caddy reload`.
+
+To pull a repo by hand on the server (for debugging, say), use SSH agent forwarding rather than storing a token there: add `ForwardAgent yes` for the server in your laptop's `~/.ssh/config`, and use `git@github.com:` remotes.
 
 ## Common Commands
 
