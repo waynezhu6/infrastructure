@@ -15,6 +15,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Catch a broken Caddyfile or app block before it reaches the server.
+      - name: Validate Caddy config
+        run: docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$PWD/apps:/etc/caddy/apps:ro" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
       - name: Setup SSH agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
@@ -26,7 +30,9 @@ jobs:
       # The server never talks to GitHub: CI copies the checked-out files over.
       # --inplace rewrites files without replacing them, so Caddy's single-file
       # bind mount of the Caddyfile sees the new contents on reload.
-      # No --delete, so server-only files (.env, sites/, backups) are never removed.
+      # No --delete, so server-only files (.env, sites/, secrets/, backups) are
+      # never removed. apps/ is the exception: it mirrors the repo exactly, so
+      # deleting an app's file unregisters it.
       - name: Copy files to server
         env:
           TARGET: ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
@@ -34,7 +40,9 @@ jobs:
           ssh "$TARGET" "mkdir -p ~/infrastructure"
           rsync -rlptz --inplace \
             --exclude=.git/ --exclude=.github/ --exclude=.env --exclude='sites/*/' \
+            --exclude=secrets/ --exclude=apps/ \
             ./ "$TARGET:~/infrastructure/"
+          rsync -rlptz --inplace --delete apps/ "$TARGET:~/infrastructure/apps/"
 
       - name: Write .env
         env:
@@ -45,7 +53,7 @@ jobs:
           printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD" > deploy.env
           scp deploy.env "$TARGET:~/infrastructure/.env"
 
-      - name: Start services and reload Caddy
+      - name: Start services, create app databases, reload Caddy
         env:
           TARGET: ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
         run: |
@@ -53,4 +61,5 @@ jobs:
             cd ~/infrastructure
             chmod 600 .env
             docker compose up -d
+            scripts/provision-dbs.sh
             docker exec caddy caddy reload --config /etc/caddy/Caddyfile'

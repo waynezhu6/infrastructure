@@ -1,0 +1,48 @@
+name: Register app
+
+# Actions tab > Register app > Run workflow. Opens a PR adding apps/<name>.caddy.
+# Merging it routes the domain to the app and creates its database on deploy.
+# Needs Settings > Actions > General > "Allow GitHub Actions to create and
+# approve pull requests".
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: App repo name, lowercase (e.g. notes)
+        required: true
+      domain:
+        description: Public hostname (e.g. notes.example.com)
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  register:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate app config
+        env:
+          NAME: ${{ inputs.name }}
+          DOMAIN: ${{ inputs.domain }}
+        run: scripts/register-app.sh "$NAME" "$DOMAIN"
+
+      - name: Validate Caddy config
+        run: docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$PWD/apps:/etc/caddy/apps:ro" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      - name: Open PR
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: register-app/${{ inputs.name }}
+          commit-message: Register app ${{ inputs.name }}
+          title: Register app ${{ inputs.name }} (${{ inputs.domain }})
+          body: |
+            Adds `apps/${{ inputs.name }}.caddy`, routing `${{ inputs.domain }}` to `${{ inputs.name }}-backend:3001` and `sites/${{ inputs.name }}`.
+
+            On merge, the Deploy workflow reloads Caddy and creates the `${{ inputs.name }}` database and role.
+
+            Before the app's first deploy, point an `A` record for `${{ inputs.domain }}` at the server.
