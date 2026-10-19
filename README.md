@@ -46,6 +46,14 @@ ssh ubuntu@<server-ip> 'sudo bash bootstrap.sh --user ubuntu --pubkey "'"$(cat d
 
 It installs Docker Engine with the compose plugin, adds the user to the `docker` group, authorizes the deploy key, opens 80/443 in the host firewall (Oracle's Ubuntu images block them with iptables by default) and creates `~/infrastructure/sites/` owned by the deploy user. It does not clone this repo; the Deploy workflow does that.
 
+To let the server pull private app images from GHCR, also pass `--ghcr-user` and pipe in a token. Create a classic personal access token with only the `read:packages` scope (GitHub → Settings → Developer settings → Personal access tokens) and save it to a file, e.g. `ghcr_token`. The script reads it from stdin so it never appears on a command line, and logs the deploy user in to `ghcr.io` once. App repos then need no registry credentials of their own.
+
+```bash
+cat ghcr_token | ssh ubuntu@<server-ip> 'sudo bash bootstrap.sh --user ubuntu --ghcr-user <github-username> --pubkey "'"$(cat deploy_key.pub)"'"'
+```
+
+Re-run with a new token the same way if it expires or is revoked.
+
 **5. Add GitHub Actions secrets** to this repo (Settings → Secrets and variables → Actions):
 
 | Secret | Value |
