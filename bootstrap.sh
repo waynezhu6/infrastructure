@@ -8,18 +8,24 @@
 # Options:
 #   --user NAME     Account that CI deploys as (SERVER_USER). Default: $SUDO_USER, else "deploy".
 #   --pubkey KEY    Public half of SSH_DEPLOY_KEY to add to that user's authorized_keys.
+#   --ghcr-user NAME
+#                   Log the deploy user in to ghcr.io as NAME so it can pull private
+#                   app images. Reads a token with read:packages scope from stdin:
+#                     cat ghcr_token | ssh ... 'sudo bash bootstrap.sh --ghcr-user NAME ...'
 
 set -euo pipefail
 
 DEPLOY_USER="${SUDO_USER:-deploy}"
 [ "$DEPLOY_USER" = "root" ] && DEPLOY_USER="deploy"
 PUBKEY=""
+GHCR_USER=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --user)   DEPLOY_USER="$2"; shift 2 ;;
     --pubkey) PUBKEY="$2"; shift 2 ;;
-    -h|--help) echo "Usage: bootstrap.sh [--user NAME] [--pubkey KEY]"; exit 0 ;;
+    --ghcr-user) GHCR_USER="$2"; shift 2 ;;
+    -h|--help) echo "Usage: bootstrap.sh [--user NAME] [--pubkey KEY] [--ghcr-user NAME < token]"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -29,6 +35,21 @@ log() { printf '\n==> %s\n' "$*"; }
 if [ "$(id -u)" -ne 0 ]; then
   echo "Run as root (sudo bash bootstrap.sh ...)" >&2
   exit 1
+fi
+
+# Read the token before anything else can consume stdin. It never goes on the
+# command line, so it stays out of shell history and the process list.
+GHCR_TOKEN=""
+if [ -n "$GHCR_USER" ]; then
+  if [ -t 0 ]; then
+    echo "--ghcr-user needs a token on stdin (cat ghcr_token | ...)" >&2
+    exit 1
+  fi
+  IFS= read -r GHCR_TOKEN || true
+  if [ -z "$GHCR_TOKEN" ]; then
+    echo "--ghcr-user given but no token was read from stdin" >&2
+    exit 1
+  fi
 fi
 
 # shellcheck source=/dev/null
@@ -85,6 +106,16 @@ if [ -n "$PUBKEY" ]; then
 fi
 
 # ------------------------------------------------------------------------------
+# App repos push their backend images to GHCR, and images from private repos are
+# private, so the server needs a login to pull them. Doing it once here keeps the
+# token on the server instead of in every app repo's secrets.
+if [ -n "$GHCR_TOKEN" ]; then
+  log "Logging $DEPLOY_USER in to ghcr.io as $GHCR_USER"
+  printf '%s' "$GHCR_TOKEN" \
+    | sudo -u "$DEPLOY_USER" -H docker login ghcr.io -u "$GHCR_USER" --password-stdin
+fi
+
+# ------------------------------------------------------------------------------
 # Oracle Cloud's Ubuntu images ship iptables rules that REJECT everything except
 # SSH, even when the VCN security list allows the port. Open 80/443 ahead of them.
 log "Opening ports 80 and 443 in the host firewall"
@@ -125,3 +156,6 @@ Server is ready. Remaining steps (see README "Setting up a new server"):
       SSH_DEPLOY_KEY=<private key>           POSTGRES_PASSWORD=<new password>
   - Run the Deploy workflow (Actions tab > Deploy > Run workflow).
 EOF
+if [ -z "$GHCR_USER" ]; then
+  echo "  - Not logged in to ghcr.io: re-run with --ghcr-user to pull private app images."
+fi
