@@ -13,6 +13,22 @@
 
 import apps/*.caddy
 
+# The bare apps domain isn't an app (apps get <name>.waynezhu.dev), so it
+# lives here rather than in apps/, which would give it a database. .dev is
+# HTTPS-only in every browser, so it needs a real site block to get a
+# certificate; this one just says there's nothing here.
+waynezhu.dev {
+	header Content-Type "text/html; charset=utf-8"
+	respond <<HTML
+		<!doctype html>
+		<html lang="en">
+		<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Not found</title>
+		<style>body{margin:0;min-height:100vh;display:grid;place-items:center;font:17px/1.5 system-ui,sans-serif;color:#555;background:#fbf9f4}@media(prefers-color-scheme:dark){body{color:#aaa;background:#1c1b19}}</style></head>
+		<body><p>Nothing here.</p></body>
+		</html>
+		HTML 404
+}
+
 # Default response for unmatched domains
 :80 {
 	respond "No site configured for this domain" 404
