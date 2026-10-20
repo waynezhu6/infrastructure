@@ -1,0 +1,20 @@
+# How every app's backend runs. The deployer fills these in for each deploy:
+#   APP           the app name, from its repo name
+#   IMAGE         the image to run, pinned by digest
+#   APP_ENV_FILE  NODE_ENV and PORT plus secrets/<app>.env
+# Caddy reaches the backend by its container name, <app>-backend, on port 3001.
+services:
+  backend:
+    image: ${IMAGE:?}
+    container_name: ${APP:?}-backend
+    restart: unless-stopped
+    env_file: ${APP_ENV_FILE:?}
+    networks:
+      - caddy-web
+      - postgres-db
+
+networks:
+  caddy-web:
+    external: true
+  postgres-db:
+    external: true

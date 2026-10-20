@@ -15,6 +15,7 @@
 #   waynezhu.dev/             this placeholder page
 #   waynezhu.dev/apps/<name>/ each app's frontend
 #   waynezhu.dev/api/<name>/  each app's backend
+#   waynezhu.dev/deploy       the deployer app CI calls
 # Each app's routes live in apps/<name>.caddy, imported here.
 waynezhu.dev {
 	header {
@@ -22,6 +23,15 @@ waynezhu.dev {
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		-Server
+	}
+
+	# App CI deploys through the deployer (deployer/).
+	@deploy path /deploy /deploy/*
+	handle @deploy {
+		reverse_proxy deployer:8080 {
+			# Stream each deploy's output back to CI as it happens.
+			flush_interval -1
+		}
 	}
 
 	import apps/*.caddy

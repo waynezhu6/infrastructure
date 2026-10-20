@@ -14,3 +14,6 @@ sites/*/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Deploy logs and state, written by the deployer on the server
+deploys/
