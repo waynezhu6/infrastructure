@@ -30,7 +30,9 @@ Caddy and Postgres run in containers, so the host only needs Docker, git and a d
 - Create an instance with a Canonical Ubuntu image (Ampere/arm64 works).
 - In the instance's VCN, open the subnet's security list and add ingress rules from `0.0.0.0/0` for TCP 80, TCP 443 and UDP 443. The host firewall is handled by the script; this cloud-level firewall is not.
 
-**2. Point DNS at it.** Create an `A` record for each app's domain (e.g. `notes.example.com`) pointing at the server's public IP. Caddy can't get HTTPS certificates until these resolve.
+**2. Point DNS at it.** Each app gets its own subdomain, `<name>.waynezhu.dev` by default (`APPS_DOMAIN` in `scripts/register-app.sh`). At the DNS provider for `waynezhu.dev`, create one wildcard `A` record, host `*`, pointing at the server's public IP (plus an `AAAA` record if the server has IPv6). New apps then need no DNS change. If the provider is Cloudflare, set the record to "DNS only" (grey cloud) so Caddy can get certificates itself. Check it with `dig +short anything.waynezhu.dev`, which should print the server's IP.
+
+Caddy gets a separate Let's Encrypt certificate per app hostname the first time it serves it; no wildcard certificate (and so no DNS plugin) is needed. Subdomains, rather than paths like `waynezhu.dev/<name>`, keep each app at its own origin: absolute asset paths, `/api` routes and cookies work unchanged and apps can't read each other's cookies.
 
 **3. Make a deploy key** on your own machine. This one key pair is what every repo's CI uses to SSH in:
 
@@ -76,21 +78,24 @@ cd ~/infrastructure && make health
 
 Projects start from [app-template](https://github.com/waynezhu6/app-template). Registering one is a PR to this repo:
 
-**1. Register it.** Either run Actions → **Register app** → Run workflow with the app's repo name (lowercase) and domain, or run it locally and open the PR yourself:
+**1. Register it.** Either run Actions → **Register app** → Run workflow with the app's repo name (lowercase), or run it locally and open the PR yourself. The domain defaults to `<name>.waynezhu.dev`; pass one to use something else.
 
 ```bash
-scripts/register-app.sh notes notes.example.com
+scripts/register-app.sh notes                     # notes.waynezhu.dev
+scripts/register-app.sh notes notes.example.com   # any other hostname
 ```
 
 Either way the result is one new file, `apps/notes.caddy`, routing the domain to `/srv/notes` (the frontend) and `notes-backend:3001` (the backend container). The workflow needs Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests" ticked once.
 
 **2. Merge the PR.** The Deploy workflow validates the Caddy config, reloads Caddy, and runs `scripts/provision-dbs.sh`, which creates a `notes` role and database with a generated password and stores its `DATABASE_URL` in `~/infrastructure/secrets/notes.env`. (Dashes in names become underscores in Postgres: `my-app` → `my_app`.)
 
-**3. Point DNS** for the domain at the server.
+**3. DNS**: nothing to do for a `waynezhu.dev` subdomain (the wildcard covers it). For any other domain, point an `A` record at the server.
 
 **4. Set the app repo's secrets**: `SERVER_HOST`, `SERVER_USER`, `SSH_DEPLOY_KEY`. No database secret: the app's deploy reads it from the server with `scripts/app-env.sh <name>`, and fails with a clear message if the app isn't registered yet.
 
 Then push to the app's `main`.
+
+**App secrets** (API keys and the like): append `NAME=value` lines to `~/infrastructure/secrets/<name>.env` on the server, after the `DATABASE_URL` line, then re-run the app's Deploy workflow. The app's deploy copies that whole file into its `.env`, so they reach the container without living in any repo or GitHub secret. Provisioning only ever reads the `DATABASE_URL` line and never rewrites an existing file, so added lines survive deploys.
 
 **Removing a project**: delete `apps/<name>.caddy` by PR. On deploy Caddy stops serving it. The database, `secrets/<name>.env`, `sites/<name>` and `~/<name>` are left in place on purpose; remove them by hand once you're sure (`docker exec -it postgres psql -U postgres -c 'DROP DATABASE <name>'` etc.).
 
