@@ -1,6 +1,6 @@
 # Caddy configuration for the shared VPS.
-# Each app's site block lives in apps/<name>.caddy, created by scripts/register-app.sh
-# (or the "Register app" workflow). Don't add app blocks here.
+# Each app's routes live in apps/<name>.caddy, created by scripts/register-app.sh
+# (or the "Register app" workflow). Don't add app routes here.
 {
 	# Admin API for `caddy reload` and the healthcheck. Both run inside this
 	# container, so it only needs to listen on localhost, not on caddy-web
@@ -11,22 +11,32 @@
 	email wayne.zhu6@gmail.com
 }
 
-import apps/*.caddy
-
-# The bare apps domain isn't an app (apps get <name>.waynezhu.dev), so it
-# lives here rather than in apps/, which would give it a database. .dev is
-# HTTPS-only in every browser, so it needs a real site block to get a
-# certificate; this one just says there's nothing here.
+# Everything is served from one domain:
+#   waynezhu.dev/             this placeholder page
+#   waynezhu.dev/apps/<name>/ each app's frontend
+#   waynezhu.dev/api/<name>/  each app's backend
+# Each app's routes live in apps/<name>.caddy, imported here.
 waynezhu.dev {
-	header Content-Type "text/html; charset=utf-8"
-	respond <<HTML
-		<!doctype html>
-		<html lang="en">
-		<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Not found</title>
-		<style>body{margin:0;min-height:100vh;display:grid;place-items:center;font:17px/1.5 system-ui,sans-serif;color:#555;background:#fbf9f4}@media(prefers-color-scheme:dark){body{color:#aaa;background:#1c1b19}}</style></head>
-		<body><p>Nothing here.</p></body>
-		</html>
-		HTML 404
+	header {
+		X-Frame-Options "SAMEORIGIN"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	import apps/*.caddy
+
+	handle {
+		header Content-Type "text/html; charset=utf-8"
+		respond <<HTML
+			<!doctype html>
+			<html lang="en">
+			<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Not found</title>
+			<style>body{margin:0;min-height:100vh;display:grid;place-items:center;font:17px/1.5 system-ui,sans-serif;color:#555;background:#fbf9f4}@media(prefers-color-scheme:dark){body{color:#aaa;background:#1c1b19}}</style></head>
+			<body><p>Nothing here.</p></body>
+			</html>
+			HTML 404
+	}
 }
 
 # Default response for unmatched domains
