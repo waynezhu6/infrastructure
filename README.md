@@ -30,9 +30,11 @@ Caddy and Postgres run in containers, so the host only needs Docker, git and a d
 - Create an instance with a Canonical Ubuntu image (Ampere/arm64 works).
 - In the instance's VCN, open the subnet's security list and add ingress rules from `0.0.0.0/0` for TCP 80, TCP 443 and UDP 443. The host firewall is handled by the script; this cloud-level firewall is not.
 
-**2. Point DNS at it.** Each app gets its own subdomain, `<name>.waynezhu.dev` by default (`APPS_DOMAIN` in `scripts/register-app.sh`). At the DNS provider for `waynezhu.dev`, create one wildcard `A` record, host `*`, pointing at the server's public IP (plus an `AAAA` record if the server has IPv6). New apps then need no DNS change. Add a second `A` record for `@` (the bare `waynezhu.dev`) to the same IP; the Caddyfile serves a small "Nothing here" page there, since `.dev` domains only load over HTTPS and so need a real site block. If the provider is Cloudflare, set the record to "DNS only" (grey cloud) so Caddy can get certificates itself. Check it with `dig +short anything.waynezhu.dev`, which should print the server's IP.
+**2. Point DNS at it.** Everything is served from one domain, `waynezhu.dev`: each app's frontend at `/apps/<name>/` and its backend at `/api/<name>/`. At the DNS provider for `waynezhu.dev`, create an `A` record for `@` (the bare domain) pointing at the server's public IP (plus an `AAAA` record if the server has IPv6). New apps need no DNS change. If the provider is Cloudflare, set the record to "DNS only" (grey cloud) so Caddy can get the certificate itself. Check it with `dig +short waynezhu.dev`, which should print the server's IP.
 
-Caddy gets a separate Let's Encrypt certificate per app hostname the first time it serves it; no wildcard certificate (and so no DNS plugin) is needed. Subdomains, rather than paths like `waynezhu.dev/<name>`, keep each app at its own origin: absolute asset paths, `/api` routes and cookies work unchanged and apps can't read each other's cookies.
+Caddy gets the Let's Encrypt certificate for `waynezhu.dev` on its own. `.dev` domains only load over HTTPS, so the Caddyfile always has a `waynezhu.dev` block; with no app at a path it serves a small "Nothing here" page.
+
+All apps share one origin, so they share cookies and browser storage. App backends set cookies with path `/api/<name>` so they only go to their own API; app-template handles the path prefixes.
 
 **3. Make a deploy key** on your own machine. This one key pair is what every repo's CI uses to SSH in:
 
@@ -78,20 +80,17 @@ cd ~/infrastructure && make health
 
 Projects start from [app-template](https://github.com/waynezhu6/app-template). Registering one is a PR to this repo:
 
-**1. Register it.** Either run Actions → **Register app** → Run workflow with the app's repo name (lowercase), or run it locally and open the PR yourself. The domain defaults to `<name>.waynezhu.dev`; pass one to use something else.
+**1. Register it.** Either run Actions → **Register app** → Run workflow with the app's repo name (lowercase), or run it locally and open the PR yourself:
 
 ```bash
-scripts/register-app.sh notes                     # notes.waynezhu.dev
-scripts/register-app.sh notes notes.example.com   # any other hostname
+scripts/register-app.sh notes
 ```
 
-Either way the result is one new file, `apps/notes.caddy`, routing the domain to `/srv/notes` (the frontend) and `notes-backend:3001` (the backend container). The workflow needs Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests" ticked once.
+Either way the result is one new file, `apps/notes.caddy`, imported into the `waynezhu.dev` block: `waynezhu.dev/apps/notes/` serves `/srv/notes` (the frontend), and `waynezhu.dev/api/notes/...` goes to `notes-backend:3001` as `/api/...` (the backend container). The workflow needs Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests" ticked once.
 
 **2. Merge the PR.** The Deploy workflow validates the Caddy config, reloads Caddy, and runs `scripts/provision-dbs.sh`, which creates a `notes` role and database with a generated password and stores its `DATABASE_URL` in `~/infrastructure/secrets/notes.env`. (Dashes in names become underscores in Postgres: `my-app` → `my_app`.)
 
-**3. DNS**: nothing to do for a `waynezhu.dev` subdomain (the wildcard covers it). For any other domain, point an `A` record at the server.
-
-**4. Set the app repo's secrets**: `SERVER_HOST`, `SERVER_USER`, `SSH_DEPLOY_KEY`. No database secret: the app's deploy reads it from the server with `scripts/app-env.sh <name>`, and fails with a clear message if the app isn't registered yet.
+**3. Set the app repo's secrets**: `SERVER_HOST`, `SERVER_USER`, `SSH_DEPLOY_KEY`. No database secret: the app's deploy reads it from the server with `scripts/app-env.sh <name>`, and fails with a clear message if the app isn't registered yet.
 
 Then push to the app's `main`.
 
