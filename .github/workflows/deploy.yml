@@ -63,6 +63,6 @@ jobs:
           ssh "$TARGET" 'set -e
             cd ~/infrastructure
             chmod 600 .env
-            docker compose up -d
+            docker compose up -d --build
             scripts/provision-dbs.sh
             docker exec caddy caddy reload --config /etc/caddy/Caddyfile'

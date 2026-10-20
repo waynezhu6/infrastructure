@@ -47,6 +47,43 @@ services:
       - "-c"
       - "shared_buffers=256MB"
 
+  # Deploys apps when their CI asks (deployer/), at waynezhu.dev/deploy.
+  # Callers prove which repo they are with a GitHub OIDC token, and each repo
+  # can only deploy its own app's image.
+  deployer:
+    build: ./deployer
+    container_name: deployer
+    restart: unless-stopped
+    environment:
+      DEPLOY_OWNER: waynezhu6
+      DEPLOY_OWNER_ID: "48568003"
+    volumes:
+      # Pulls images and runs app containers through the host's Docker. That is
+      # root-equivalent, as the deploy user's docker group already is.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The deploy user's GHCR login (bootstrap.sh --ghcr-user), to pull
+      # private app images. Fails loudly rather than creating an empty one.
+      - type: bind
+        source: ${HOME}/.docker/config.json
+        target: /root/.docker/config.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - ./apps:/infra/apps:ro
+      - ./secrets:/infra/secrets:ro
+      - ./sites:/infra/sites
+      # Deploy logs (deploys/logs/<app>/<id>.log) and which image each app runs.
+      - ./deploys:/data
+    networks:
+      - caddy-web
+    # A restart waits for running deploys to finish.
+    stop_grace_period: 3m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/deploy/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 # Named volumes for data persistence
 volumes:
   caddy_data:

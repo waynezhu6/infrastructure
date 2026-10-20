@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  caddy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Caddy config
+        run: docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$PWD/apps:/etc/caddy/apps:ro" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+  deployer:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deployer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: deployer/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: Build image
+        run: docker build -t deployer .
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shellcheck
+        run: shellcheck actions/deploy/deploy.sh scripts/*.sh bootstrap.sh
