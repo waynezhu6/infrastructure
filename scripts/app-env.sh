@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Prints the server-side environment for a registered app (currently its
-# DATABASE_URL). App deploys append this to the app's .env, so database
-# credentials never live in the app repo.
+# Prints the server-side environment for a registered app: its DATABASE_URL
+# plus any secrets added by hand to secrets/<name>.env. App deploys append this
+# to the app's .env, so credentials never live in the app repo.
 #
 # Usage: scripts/app-env.sh <name>
 

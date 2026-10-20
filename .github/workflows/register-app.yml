@@ -12,8 +12,8 @@ on:
         description: App repo name, lowercase (e.g. notes)
         required: true
       domain:
-        description: Public hostname (e.g. notes.example.com)
-        required: true
+        description: Public hostname; leave empty for <name>.waynezhu.dev
+        required: false
 
 permissions:
   contents: write
@@ -29,7 +29,9 @@ jobs:
         env:
           NAME: ${{ inputs.name }}
           DOMAIN: ${{ inputs.domain }}
-        run: scripts/register-app.sh "$NAME" "$DOMAIN"
+        run: |
+          scripts/register-app.sh "$NAME" "$DOMAIN"
+          echo "DOMAIN=$(awk '/ {$/ {print $1; exit}' "apps/$NAME.caddy")" >> "$GITHUB_ENV"
 
       - name: Validate Caddy config
         run: docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$PWD/apps:/etc/caddy/apps:ro" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
@@ -39,10 +41,10 @@ jobs:
         with:
           branch: register-app/${{ inputs.name }}
           commit-message: Register app ${{ inputs.name }}
-          title: Register app ${{ inputs.name }} (${{ inputs.domain }})
+          title: Register app ${{ inputs.name }} (${{ env.DOMAIN }})
           body: |
-            Adds `apps/${{ inputs.name }}.caddy`, routing `${{ inputs.domain }}` to `${{ inputs.name }}-backend:3001` and `sites/${{ inputs.name }}`.
+            Adds `apps/${{ inputs.name }}.caddy`, routing `${{ env.DOMAIN }}` to `${{ inputs.name }}-backend:3001` and `sites/${{ inputs.name }}`.
 
             On merge, the Deploy workflow reloads Caddy and creates the `${{ inputs.name }}` database and role.
 
-            Before the app's first deploy, point an `A` record for `${{ inputs.domain }}` at the server.
+            Subdomains of waynezhu.dev already resolve through the wildcard record. For any other domain, point an `A` record for `${{ env.DOMAIN }}` at the server before the app's first deploy.
