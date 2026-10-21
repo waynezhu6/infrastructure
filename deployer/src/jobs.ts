@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -11,6 +11,20 @@ export interface DeployRequest {
   repository: string;
   sha: string;
   runId: string;
+  // Extra environment for the backend, from the app repo's GitHub secrets.
+  // Kept in memory only: logs and state.json never see the values.
+  env: Record<string, string>;
+}
+
+// Identifies what a deploy would put live: the image plus its environment, so
+// changing only a secret still redeploys.
+export function envHash(env: Record<string, string>): string {
+  const sorted = Object.keys(env).sort().map((k) => [k, env[k]]);
+  return createHash("sha256").update(JSON.stringify(sorted)).digest("hex");
+}
+
+function same(a: DeployRequest, b: DeployRequest): boolean {
+  return a.digest === b.digest && envHash(a.env) === envHash(b.env);
 }
 
 // One deploy of one image. Its output is kept in memory for anyone attached
@@ -63,17 +77,27 @@ export class Store {
   }
 
   current(app: string): string | undefined {
+    return this.state(app)?.digest;
+  }
+
+  // Whether this exact image and environment is what's live.
+  isCurrent(req: DeployRequest): boolean {
+    const state = this.state(req.app);
+    return state?.digest === req.digest && (state.env ?? envHash({})) === envHash(req.env);
+  }
+
+  setCurrent(req: DeployRequest, job: string): void {
+    mkdirSync(join(this.dataDir, "apps", req.app), { recursive: true });
+    const state = { digest: req.digest, env: envHash(req.env), job, at: new Date().toISOString() };
+    writeFileSync(this.stateFile(req.app), JSON.stringify(state, null, 2) + "\n");
+  }
+
+  private state(app: string): { digest?: string; env?: string } | undefined {
     try {
-      return JSON.parse(readFileSync(this.stateFile(app), "utf8")).digest;
+      return JSON.parse(readFileSync(this.stateFile(app), "utf8"));
     } catch {
       return undefined;
     }
-  }
-
-  setCurrent(app: string, digest: string, job: string): void {
-    mkdirSync(join(this.dataDir, "apps", app), { recursive: true });
-    const state = { digest, job, at: new Date().toISOString() };
-    writeFileSync(this.stateFile(app), JSON.stringify(state, null, 2) + "\n");
   }
 
   private stateFile(app: string): string {
@@ -101,13 +125,13 @@ export class Deployer {
     const slot = this.apps.get(req.app) ?? {};
     this.apps.set(req.app, slot);
 
-    // The same image already on its way: attach to that deploy.
-    if (slot.running?.req.digest === req.digest) return slot.running;
-    if (slot.pending?.req.digest === req.digest) return slot.pending;
+    // The same image and environment already on its way: attach to that deploy.
+    if (slot.running && same(slot.running.req, req)) return slot.running;
+    if (slot.pending && same(slot.pending.req, req)) return slot.pending;
 
     const job = this.track(new Job(req, (id) => this.store.logFile(req.app, id)));
 
-    if (!slot.running && this.store.current(req.app) === req.digest) {
+    if (!slot.running && this.store.isCurrent(req)) {
       job.finish("succeeded", `${req.app} is already running ${req.digest}; nothing to do.`);
       return job;
     }

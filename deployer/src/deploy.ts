@@ -86,7 +86,7 @@ export function createRunner(deps: DeployDeps): Runner {
 
       mkdirSync(appDir, { recursive: true });
       const envFile = join(appDir, "app.env");
-      writeFileSync(envFile, `NODE_ENV=production\nPORT=3001\n${readFileSync(secrets, "utf8").replace(/\n?$/, "\n")}`, { mode: 0o600 });
+      writeFileSync(envFile, appEnv(readFileSync(secrets, "utf8"), job.req.env), { mode: 0o600 });
 
       const up = (img: string) =>
         run(["compose", "--project-name", app, "--file", config.composeFile, "up", "--detach", "--pull", "never", "--remove-orphans"], {
@@ -122,7 +122,7 @@ export function createRunner(deps: DeployDeps): Runner {
 
       if (previous) await run(["tag", `${local}:current`, `${local}:previous`]);
       await run(["tag", image, `${local}:current`]);
-      store.setCurrent(app, digest, job.id);
+      store.setCurrent(job.req, job.id);
       // Untagged images are older deploys, already replaced twice.
       await quiet(["image", "prune", "--force"]);
       job.log(`==> ${app} is live on ${digest}`);
@@ -130,6 +130,17 @@ export function createRunner(deps: DeployDeps): Runner {
       rmSync(staged, { recursive: true, force: true });
     }
   };
+}
+
+// The backend's environment: NODE_ENV and PORT, the server's secrets/<app>.env
+// (DATABASE_URL and anything added by hand), then the app repo's GitHub
+// secrets, which win over a hand-added line of the same name. The server
+// rejects GitHub secrets named like the server-owned ones (server.ts).
+export function appEnv(serverFile: string, env: Record<string, string>): string {
+  const lines = serverFile.split("\n").filter((l) => l.trim() && !Object.hasOwn(env, l.split("=")[0].trim()));
+  // Single quotes keep compose from interpolating or trimming the value.
+  const extra = Object.entries(env).map(([k, v]) => `${k}='${v}'`);
+  return ["NODE_ENV=production", "PORT=3001", ...lines, ...extra].join("\n") + "\n";
 }
 
 async function waitHealthy(deps: DeployDeps, job: Job, container: string): Promise<boolean> {

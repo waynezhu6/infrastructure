@@ -2,7 +2,7 @@ name: Deploy to waynezhu.dev
 description: >
   Asks the deployer on the server to run an app's backend image and publish the
   frontend inside it. Proves which repo is asking with a GitHub OIDC token, so
-  the app repo needs no secrets; the job needs `permissions: id-token: write`.
+  the app repo needs no deploy secrets; the job needs `permissions: id-token: write`.
   The deploy's output streams into this step's log, and the step fails if the
   deploy does.
 
@@ -10,6 +10,13 @@ inputs:
   digest:
     description: Digest of the pushed backend image (sha256:...), e.g. docker/build-push-action's `digest` output.
     required: true
+  env:
+    description: >
+      Extra environment for the backend, as a JSON object of strings. Pass
+      `toJSON(secrets)` in an expression to hand it every secret of the app repo
+      (GITHUB_TOKEN is dropped). Values must be single-line; NODE_ENV, PORT and
+      DATABASE_URL are the server's and can't be set here.
+    default: "{}"
   url:
     description: The deployer's address. Also the OIDC audience.
     default: https://waynezhu.dev/deploy
@@ -22,4 +29,5 @@ runs:
       env:
         DIGEST: ${{ inputs.digest }}
         DEPLOY_URL: ${{ inputs.url }}
+        DEPLOY_ENV: ${{ inputs.env }}
       run: "$GITHUB_ACTION_PATH/deploy.sh"

@@ -95,6 +95,26 @@ test("status of a deploy is visible to its own app only, from a given line", asy
   assert.deepEqual(later.lines, ["started"]);
 });
 
+test("passes env through and rejects server-owned or unsafe names and values", async () => {
+  const bad = [
+    { DATABASE_URL: "postgres://evil" },
+    { lower: "x" },
+    { KEY: "it's" },
+    { KEY: "a\nB=c" },
+    { KEY: 1 },
+    ["KEY"],
+  ];
+  for (const env of bad) {
+    const res = await post("notes", { digest: digest("e"), env });
+    assert.equal(res.status, 400, JSON.stringify(env));
+  }
+  const res = await post("notes", { digest: digest("e"), env: { RAPIDAPI_KEY: "k" } });
+  assert.equal(res.status, 200);
+  assert.deepEqual(deployer.get(res.headers.get("x-deploy-id")!)!.req.env, { RAPIDAPI_KEY: "k" });
+  await res.body!.cancel();
+  release(true);
+});
+
 test("healthz needs no token", async () => {
   assert.equal((await fetch(`${base}/deploy/healthz`)).status, 200);
 });

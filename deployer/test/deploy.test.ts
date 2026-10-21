@@ -10,7 +10,7 @@ import { Deployer, Store, type Job } from "../src/jobs.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
 
-function setup(opts: { previous?: string; running?: string; healthy?: (call: number) => boolean }) {
+function setup(opts: { previous?: string; running?: string; healthy?: (call: number) => boolean; env?: Record<string, string> }) {
   const infraDir = mkdtempSync(join(tmpdir(), "infra-"));
   const dataDir = mkdtempSync(join(tmpdir(), "data-"));
   mkdirSync(join(infraDir, "secrets"));
@@ -39,7 +39,7 @@ function setup(opts: { previous?: string; running?: string; healthy?: (call: num
   const deployer = new Deployer(createRunner({ config, store, exec, fetch: fetchFake, sleep: async () => {} }), store);
   const run = (): Promise<Job> =>
     new Promise((resolve) => {
-      const job = deployer.submit({ app: "reader", digest, repository: "waynezhu6/reader", sha: "abcdef0", runId: "1" });
+      const job = deployer.submit({ app: "reader", digest, repository: "waynezhu6/reader", sha: "abcdef0", runId: "1", env: opts.env ?? {} });
       job.once("done", () => resolve(job));
     });
   const docker = () => calls.map((c) => c.args.slice(0, 2).join(" "));
@@ -109,4 +109,17 @@ test("an app without secrets fails before touching anything", async () => {
   assert.match(job.lines.join("\n"), /no secrets\/reader.env/);
   assert.equal(calls.length, 0);
   assert.ok(existsSync(join(infraDir, "sites", "reader")));
+});
+
+test("GitHub secrets join the server's env file and win over hand-added lines", async () => {
+  const { dataDir, run, store } = setup({ env: { READER_KEY: "from github", RAPIDAPI_KEY: "r#1 $x" } });
+  const job = await run();
+  assert.equal(job.status, "succeeded", job.lines.join("\n"));
+  assert.equal(
+    readFileSync(join(dataDir, "apps", "reader", "app.env"), "utf8"),
+    "NODE_ENV=production\nPORT=3001\nDATABASE_URL=postgres://x\nREADER_KEY='from github'\nRAPIDAPI_KEY='r#1 $x'\n",
+  );
+  assert.ok(!job.lines.join("\n").includes("from github"));
+  assert.ok(!readFileSync(join(dataDir, "apps", "reader", "state.json"), "utf8").includes("from github"));
+  assert.equal(store.current("reader"), digest);
 });
