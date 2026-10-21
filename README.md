@@ -91,7 +91,7 @@ scripts/register-app.sh notes
 
 Either way the result is one new file, `apps/notes.caddy`, imported into the `waynezhu.dev` block: `waynezhu.dev/apps/notes/` serves `/srv/notes` (the frontend), and `waynezhu.dev/api/notes/...` goes to `notes-backend:3001` as `/api/...` (the backend container). The workflow needs Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests" ticked once.
 
-**2. Merge the PR.** The Deploy workflow validates the Caddy config, reloads Caddy, and runs `scripts/provision-dbs.sh`, which creates a `notes` role and database with a generated password and stores its `DATABASE_URL` in `~/infrastructure/secrets/notes.env`. (Dashes in names become underscores in Postgres: `my-app` → `my_app`.)
+**2. Merge the PR.** The Deploy workflow validates the Caddy config, reloads Caddy, and runs `scripts/provision-dbs.sh`, which creates a `notes` role and database with a generated password and stores its `DATABASE_URL` in `~/infrastructure/secrets/notes.env`. (Dashes in names become underscores in Postgres: `my-app` → `my_app`.) Until the app first deploys, `waynezhu.dev/apps/notes/` shows a "Registered, but nothing has been deployed here yet" page, so you can check the registration on its own.
 
 **3. Push to the app's `main`.** The app repo needs no secrets: its Deploy workflow proves who it is to the deployer with a GitHub OIDC token (see "Deploys" below). The deploy fails with a clear message if the app isn't registered yet.
 
