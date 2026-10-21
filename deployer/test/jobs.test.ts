@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Deployer, Store, type Job } from "../src/jobs.js";
 
 const digest = (n: number) => `sha256:${String(n).repeat(64).slice(0, 64)}`;
-const req = (app: string, n: number) => ({ app, digest: digest(n), repository: `waynezhu6/${app}`, sha: "abc", runId: "1" });
+const req = (app: string, n: number, env: Record<string, string> = {}) => ({ app, digest: digest(n), repository: `waynezhu6/${app}`, sha: "abc", runId: "1", env });
 
 // A runner whose deploys finish only when the test says so.
 function setup() {
@@ -73,11 +73,20 @@ test("a repeat call for an image already deploying or waiting joins that deploy"
 
 test("a repeat call for the image already live is a no-op", () => {
   const { deployer, store, started } = setup();
-  store.setCurrent("reader", digest(1), "old");
+  store.setCurrent(req("reader", 1), "old");
   const job = deployer.submit(req("reader", 1));
   assert.equal(job.status, "succeeded");
   assert.match(job.lines[0], /already running/);
   assert.equal(started.length, 0);
+});
+
+test("the same image with changed secrets deploys again", () => {
+  const { deployer, store, started } = setup();
+  store.setCurrent(req("reader", 1, { KEY: "a" }), "old");
+  assert.equal(deployer.submit(req("reader", 1, { KEY: "a" })).status, "succeeded");
+  const job = deployer.submit(req("reader", 1, { KEY: "b" }));
+  assert.equal(job.status, "running");
+  assert.equal(started.length, 1);
 });
 
 test("a failed deploy is reported and the next one still runs", async () => {

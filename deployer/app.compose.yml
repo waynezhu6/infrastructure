@@ -1,7 +1,7 @@
 # How every app's backend runs. The deployer fills these in for each deploy:
 #   APP           the app name, from its repo name
 #   IMAGE         the image to run, pinned by digest
-#   APP_ENV_FILE  NODE_ENV and PORT plus secrets/<app>.env
+#   APP_ENV_FILE  NODE_ENV and PORT, secrets/<app>.env and the app repo's secrets
 # Caddy reaches the backend by its container name, <app>-backend, on port 3001.
 services:
   backend:

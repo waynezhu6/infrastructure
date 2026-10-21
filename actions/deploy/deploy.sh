@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Client side of the deployer (deployer/src/server.ts). Run by action.yml with
-# DIGEST and DEPLOY_URL set.
+# DIGEST, DEPLOY_URL and DEPLOY_ENV set.
 set -euo pipefail
 
 if ! [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
@@ -9,6 +9,13 @@ if ! [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
 fi
 if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
   echo "::error::The deploy job needs 'permissions: id-token: write' so the server can tell which repo is deploying."
+  exit 1
+fi
+
+# toJSON(secrets) always carries the job's own GitHub token; the backend has no use for it.
+if ! body="$(jq -cn --arg digest "$DIGEST" --argjson env "${DEPLOY_ENV:-"{}"}" \
+  '{digest: $digest, env: ($env | if type == "object" then with_entries(select(.key | ascii_upcase != "GITHUB_TOKEN")) else error("not an object") end)}' 2>/dev/null)"; then
+  echo "::error::The env input must be a JSON object, e.g. \${{ toJSON(secrets) }}."
   exit 1
 fi
 
@@ -36,7 +43,7 @@ echo "::add-mask::$TOKEN"
 set +e
 curl -sS -N --connect-timeout 20 --fail-with-body -D "$headers" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  --data "{\"digest\":\"$DIGEST\"}" "$DEPLOY_URL" | tee "$out"
+  --data-binary @- "$DEPLOY_URL" <<<"$body" | tee "$out"
 code="${PIPESTATUS[0]}"
 set -e
 

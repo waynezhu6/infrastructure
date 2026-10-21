@@ -97,7 +97,9 @@ Either way the result is one new file, `apps/notes.caddy`, imported into the `wa
 
 This repo is public so app repos, public or private, can use its deploy action. If it ever goes private, GitHub stops public repos from using its actions (their deploy fails with "Unable to resolve action `waynezhu6/infrastructure`"), and private ones need Settings → Actions → General → Access set to "Accessible from repositories owned by the user 'waynezhu6'".
 
-**App secrets** (API keys and the like): append `NAME=value` lines to `~/infrastructure/secrets/<name>.env` on the server, after the `DATABASE_URL` line, then re-run the app's Deploy workflow. Each deploy passes that whole file to the container as its environment, so they reach it without living in any repo or GitHub secret. Provisioning only ever reads the `DATABASE_URL` line and never rewrites an existing file, so added lines survive deploys.
+**App secrets** (API keys and the like): add them as Actions secrets on the app's repo (Settings → Secrets and variables → Actions), then re-run its Deploy workflow. The template's workflow passes `toJSON(secrets)` to `actions/deploy`, so every repo secret reaches the backend as an environment variable of the same name; the deployer writes them into the app's env file on the server, next to `DATABASE_URL`, and never logs them. Changing only a secret still redeploys. `NODE_ENV`, `PORT` and `DATABASE_URL` belong to the server and are refused, and values must be single-line without `'`.
+
+Lines added by hand to `~/infrastructure/secrets/<name>.env` on the server still work too; a GitHub secret of the same name wins. Provisioning only ever reads the `DATABASE_URL` line and never rewrites an existing file, so added lines survive deploys.
 
 **Removing a project**: delete `apps/<name>.caddy` by PR. On deploy Caddy stops serving it and the deployer refuses its deploys. The container, database, `secrets/<name>.env` and `sites/<name>` are left in place on purpose; remove them by hand once you're sure (`docker rm -f <name>-backend`, `docker exec -it postgres psql -U postgres -c 'DROP DATABASE <name>'` etc.).
 
@@ -105,7 +107,7 @@ This repo is public so app repos, public or private, can use its deploy action. 
 
 **This repo**: on merge to `main`, CI copies the repo's files to `~/infrastructure` with rsync, writes `.env`, runs `docker compose up -d`, creates any missing app databases and reloads Caddy. Secrets stored in GitHub Actions: `SERVER_HOST`, `SERVER_USER`, `SSH_DEPLOY_KEY`, `POSTGRES_PASSWORD`.
 
-**Each project repo**: on merge to `main`, CI builds one image holding the backend and the built frontend, pushes it to `ghcr.io/<owner>/<app>-backend`, then calls the deployer with the image's digest through `actions/deploy` in this repo. See "Deploys" below. Project repos hold no deploy secrets.
+**Each project repo**: on merge to `main`, CI builds one image holding the backend and the built frontend, pushes it to `ghcr.io/<owner>/<app>-backend`, then calls the deployer with the image's digest through `actions/deploy` in this repo. See "Deploys" below. Project repos hold no deploy secrets; their own Actions secrets become the backend's environment.
 
 The server never runs `git clone` or `git pull`; CI pushes files to it. So the server holds no GitHub credentials beyond the read-only GHCR login. A few things follow from that:
 
@@ -128,7 +130,7 @@ App repos deploy by calling `POST waynezhu.dev/deploy` with their image digest (
 
 The app is always the calling repo's own name, and the image is always `ghcr.io/waynezhu6/<app>-backend` at the given digest, so a repo can only deploy its own app's image and the endpoint never runs anything else. Each token can start one deploy. Nothing is stored in any repo; the server keeps its existing GHCR login to pull.
 
-**What a deploy does.** Pull the image by digest; copy the frontend out of it (`/app/frontend/dist`); start the backend from `deployer/app.compose.yml` (container `<app>-backend` on `caddy-web` and `postgres-db`, environment from `secrets/<app>.env`); wait up to 90 s for `/api/health`. If it's healthy, the new frontend replaces `sites/<app>` and the deploy succeeds. If not, the last 40 log lines are shown, the previous image is started again and the frontend is left as it was, so a bad push doesn't take the app down.
+**What a deploy does.** Pull the image by digest; copy the frontend out of it (`/app/frontend/dist`); start the backend from `deployer/app.compose.yml` (container `<app>-backend` on `caddy-web` and `postgres-db`, environment from `secrets/<app>.env` plus the app repo's Actions secrets); wait up to 90 s for `/api/health`. If it's healthy, the new frontend replaces `sites/<app>` and the deploy succeeds. If not, the last 40 log lines are shown, the previous image is started again and the frontend is left as it was, so a bad push doesn't take the app down.
 
 **Output.** The request stays open and the deploy's output streams into the Actions log as it happens, ending with `==> deploy <id> succeeded|failed|superseded`, which passes or fails the step. If the connection drops the deploy carries on and the action follows it at `GET /deploy/jobs/<id>`. Every deploy's log is also kept at `~/infrastructure/deploys/logs/<app>/<id>.log`.
 

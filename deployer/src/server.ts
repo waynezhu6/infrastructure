@@ -13,8 +13,10 @@ export interface ServerDeps {
 
 // The deploy API, served by Caddy at waynezhu.dev/deploy:
 //
-//   POST /deploy             {"digest": "sha256:..."}  start (or join) a deploy
-//                            of the calling repo's app. The response streams
+//   POST /deploy             {"digest": "sha256:...", "env": {"NAME": "value"}}
+//                            start (or join) a deploy of the calling repo's
+//                            app; env (optional) is extra environment for its
+//                            backend, from the app repo's GitHub secrets. The response streams
 //                            the deploy's output and ends with the verdict line
 //                            "==> deploy <id> <succeeded|failed|superseded>".
 //   GET  /deploy/jobs/<id>   status and output of a deploy, as JSON, for a CI
@@ -41,11 +43,12 @@ export function createApp(deps: ServerDeps) {
         const body = await readJson(req);
         const digest = typeof body?.digest === "string" ? body.digest : "";
         if (!DIGEST.test(digest)) return send(res, 400, { error: 'body must be {"digest": "sha256:<64 hex>"}' });
+        const env = parseEnv(body?.env);
         if (!existsSync(join(deps.infraDir, "apps", `${caller.app}.caddy`))) {
           return send(res, 404, { error: `${caller.app} is not registered. Run scripts/register-app.sh ${caller.app} in the infrastructure repo and merge the PR.` });
         }
 
-        const job = deps.deployer.submit({ app: caller.app, digest, repository: caller.repository, sha: caller.sha, runId: caller.runId });
+        const job = deps.deployer.submit({ app: caller.app, digest, repository: caller.repository, sha: caller.sha, runId: caller.runId, env });
         return stream(res, job);
       }
 
@@ -96,11 +99,31 @@ function stream(res: ServerResponse, job: Job) {
 
 class BadRequest extends Error {}
 
+// Names the server sets itself; an app's GitHub secrets can't replace them.
+const SERVER_OWNED = new Set(["NODE_ENV", "PORT", "DATABASE_URL"]);
+const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
+
+function parseEnv(raw: unknown): Record<string, string> {
+  if (raw === undefined) return {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new BadRequest("env must be an object of strings");
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    if (!ENV_NAME.test(name)) throw new BadRequest(`env name ${JSON.stringify(name)} must be uppercase letters, digits and _`);
+    if (SERVER_OWNED.has(name)) throw new BadRequest(`${name} is set by the server; remove the ${name} secret from the app repo`);
+    // The env file has one NAME='value' per line (deploy.ts).
+    if (typeof value !== "string" || /['\r\n\0]/.test(value)) {
+      throw new BadRequest(`env ${name} must be a single-line string without single quotes`);
+    }
+    env[name] = value;
+  }
+  return env;
+}
+
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown> | undefined> {
   let body = "";
   for await (const chunk of req) {
     body += chunk;
-    if (body.length > 1024) throw new BadRequest("body too large");
+    if (body.length > 65536) throw new BadRequest("body too large");
   }
   try {
     const parsed = JSON.parse(body);
