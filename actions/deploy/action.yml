@@ -12,11 +12,12 @@ inputs:
     required: true
   env:
     description: >
-      Extra environment for the backend, as a JSON object of strings. Pass
-      `toJSON(secrets)` in an expression to hand it every secret of the app repo
-      (GITHUB_TOKEN is dropped). Values must be single-line; NODE_ENV, PORT and
-      DATABASE_URL are the server's and can't be set here.
-    default: "{}"
+      Extra environment for the backend: one NAME=value line per variable,
+      each value usually one of the app repo's secrets. List them by name
+      rather than passing toJSON(secrets), which GitHub flags as possibly
+      malicious. Values must be single-line; NODE_ENV, PORT and DATABASE_URL
+      are the server's and can't be set here.
+    default: ""
   url:
     description: The deployer's address. Also the OIDC audience.
     default: https://waynezhu.dev/deploy

@@ -12,10 +12,15 @@ if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
   exit 1
 fi
 
-# toJSON(secrets) always carries the job's own GitHub token; the backend has no use for it.
-if ! body="$(jq -cn --arg digest "$DIGEST" --argjson env "${DEPLOY_ENV:-"{}"}" \
-  '{digest: $digest, env: ($env | if type == "object" then with_entries(select(.key | ascii_upcase != "GITHUB_TOKEN")) else error("not an object") end)}' 2>/dev/null)"; then
-  echo "::error::The env input must be a JSON object, e.g. \${{ toJSON(secrets) }}."
+# DEPLOY_ENV is NAME=value lines (or a JSON object). The job's own GitHub token
+# is dropped if passed; the backend has no use for it.
+if ! body="$(jq -cn --arg digest "$DIGEST" --arg env "${DEPLOY_ENV:-}" '
+  ($env | ltrimstr(" ")) as $raw
+  | (if ($raw | startswith("{")) then ($raw | fromjson)
+     else [$raw | split("\n")[] | select(test("\\S")) | (capture("^\\s*(?<key>[^=\\s]+)=(?<value>.*)$") // error("bad line"))] | from_entries end)
+  | if type == "object" then with_entries(select(.key | ascii_upcase != "GITHUB_TOKEN")) else error("not an object") end
+  | {digest: $digest, env: .}' 2>/dev/null)"; then
+  echo "::error::The env input must be NAME=value lines, e.g. RAPIDAPI_KEY=\${{ secrets.RAPIDAPI_KEY }}."
   exit 1
 fi
 
