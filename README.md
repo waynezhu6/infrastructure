@@ -95,7 +95,7 @@ Either way the result is one new file, `apps/notes.caddy`, imported into the `wa
 
 **3. Push to the app's `main`.** The app repo needs no secrets: its Deploy workflow proves who it is to the deployer with a GitHub OIDC token (see "Deploys" below). The deploy fails with a clear message if the app isn't registered yet.
 
-While this repo is private, other repos can only use its deploy action once: Settings → Actions → General → Access → "Accessible from repositories owned by the user 'waynezhu6'". Even then, only *private* app repos can use it: GitHub never lets a public repo use a private repo's actions, and its deploy fails at once with "Unable to resolve action `waynezhu6/infrastructure`". Once this repo is public, neither limit applies.
+This repo is public so app repos, public or private, can use its deploy action. If it ever goes private, GitHub stops public repos from using its actions (their deploy fails with "Unable to resolve action `waynezhu6/infrastructure`"), and private ones need Settings → Actions → General → Access set to "Accessible from repositories owned by the user 'waynezhu6'".
 
 **App secrets** (API keys and the like): append `NAME=value` lines to `~/infrastructure/secrets/<name>.env` on the server, after the `DATABASE_URL` line, then re-run the app's Deploy workflow. Each deploy passes that whole file to the container as its environment, so they reach it without living in any repo or GitHub secret. Provisioning only ever reads the `DATABASE_URL` line and never rewrites an existing file, so added lines survive deploys.
 
