@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prints the server-side environment for a published app: its DATABASE_URL
+# Prints the server-side environment for a registered app: its DATABASE_URL
 # plus any secrets added by hand to secrets/<name>.env. App deploys append this
 # to the app's .env, so credentials never live in the app repo.
 #
@@ -16,7 +16,7 @@ if ! [[ "$NAME" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]]; then
 fi
 
 if [ ! -f "apps/$NAME.caddy" ]; then
-  echo "App '$NAME' is not published. Run scripts/publish-app.sh in the infrastructure repo (or its Publish app workflow) and merge the PR." >&2
+  echo "App '$NAME' is not registered. Run scripts/register-app.sh in the infrastructure repo (or its Register app workflow) and merge the PR." >&2
   exit 1
 fi
 if [ ! -f "secrets/$NAME.env" ]; then

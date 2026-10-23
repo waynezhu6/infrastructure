@@ -10,8 +10,8 @@ This repo is the infrastructure boilerplate for my personal server (currently us
 │   ├── docker-compose.yml    ← Caddy, Postgres and the deployer
 │   ├── Caddyfile             ← global options; imports apps/*.caddy
 │   ├── apps/
-│   │   └── myapp.caddy       ← one site block per published app
-│   ├── scripts/              ← publish-app.sh, app-env.sh
+│   │   └── myapp.caddy       ← one site block per registered app
+│   ├── scripts/              ← register-app.sh, app-env.sh
 │   ├── deployer/             ← the service app CI deploys through (waynezhu.dev/deploy)
 │   ├── actions/deploy/       ← the GitHub Action app repos call it with
 │   ├── deploys/              ← NOT in git; deploy logs and each app's current image
@@ -81,19 +81,19 @@ cd ~/infrastructure && make health
 
 ## Adding a New Project
 
-Projects start from [app-template](https://github.com/waynezhu6/app-template). Two things decide what an app gets: a PR here **publishes** it (puts it online and lets it deploy), and the app's own `infra.yml` says what it needs from the server.
+Projects start from [app-template](https://github.com/waynezhu6/app-template). Two things decide what an app gets: a PR here **registers** it (puts it online and lets it deploy), and the app's own `infra.yml` says what it needs from the server.
 
-**1. Publish it.** Either run Actions → **Publish app** → Run workflow with the app's repo name (lowercase), or run it locally and open the PR yourself:
+**1. Register it.** Either run Actions → **Register app** → Run workflow with the app's repo name (lowercase), or run it locally and open the PR yourself:
 
 ```bash
-scripts/publish-app.sh notes
+scripts/register-app.sh notes
 ```
 
 Either way the result is one new file, `apps/notes.caddy`, imported into the `waynezhu.dev` block: `waynezhu.dev/apps/notes/` serves `/srv/notes` (the frontend), and `waynezhu.dev/api/notes/...` goes to `notes-backend:3001` as `/api/...` (the backend container). The workflow needs Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests" ticked once.
 
-**2. Merge the PR.** The Deploy workflow validates the Caddy config and reloads Caddy, and the deployer starts accepting the app's deploys. This PR is the one approval step: nothing of an unpublished app runs on the server. Until the app first deploys, `waynezhu.dev/apps/notes/` shows a "Published, but nothing has been deployed here yet" page, so you can check it on its own.
+**2. Merge the PR.** The Deploy workflow validates the Caddy config and reloads Caddy, and the deployer starts accepting the app's deploys. This PR is the one approval step: nothing of an unregistered app runs on the server. Until the app first deploys, `waynezhu.dev/apps/notes/` shows a "Registered, but nothing has been deployed here yet" page, so you can check it on its own.
 
-**3. Push to the app's `main`.** The app repo needs no secrets: its Deploy workflow proves who it is to the deployer with a GitHub OIDC token (see "Deploys" below). The deploy fails with a clear message if the app isn't published yet.
+**3. Push to the app's `main`.** The app repo needs no secrets: its Deploy workflow proves who it is to the deployer with a GitHub OIDC token (see "Deploys" below). The deploy fails with a clear message if the app isn't registered yet.
 
 **The app's `infra.yml`.** A file at the root of the app repo, sent with every deploy. The deployer creates whatever it declares that doesn't exist yet, before starting the backend, and never removes anything:
 
@@ -114,7 +114,7 @@ This repo is public so app repos, public or private, can use its deploy action. 
 
 Lines added by hand to `~/infrastructure/secrets/<name>.env` on the server still work too; a GitHub secret of the same name wins. Provisioning only reads the `DATABASE_URL` line and only ever appends it, so added lines survive deploys.
 
-**Removing a project**: delete `apps/<name>.caddy` by PR (unpublishing it). On deploy Caddy stops serving it and the deployer refuses its deploys. The container, database, `secrets/<name>.env` and `sites/<name>` are left in place on purpose; remove them by hand once you're sure (`docker rm -f <name>-backend`, `docker exec -it postgres psql -U postgres -c 'DROP DATABASE <name>'` etc.).
+**Removing a project**: delete `apps/<name>.caddy` by PR (unregistering it). On deploy Caddy stops serving it and the deployer refuses its deploys. The container, database, `secrets/<name>.env` and `sites/<name>` are left in place on purpose; remove them by hand once you're sure (`docker rm -f <name>-backend`, `docker exec -it postgres psql -U postgres -c 'DROP DATABASE <name>'` etc.).
 
 ## CI/CD
 
@@ -126,7 +126,7 @@ The server never runs `git clone` or `git pull`; CI pushes files to it. So the s
 
 - Don't edit files under `~/infrastructure` on the server; the next deploy overwrites them. Make changes by PR.
 - The rsync doesn't delete anything, so `.env`, `sites/` and anything else you keep there survive deploys. A file removed from this repo stays on the server until you delete it by hand.
-- `apps/` is the exception: it's mirrored exactly (`--delete`), so removing an app's file unpublishes it.
+- `apps/` is the exception: it's mirrored exactly (`--delete`), so removing an app's file unregisters it.
 - Files are written in place (`--inplace`), so Caddy's single-file mount of the Caddyfile sees the new version on `caddy reload`.
 
 To pull a repo by hand on the server (for debugging, say), use SSH agent forwarding rather than storing a token there: add `ForwardAgent yes` for the server in your laptop's `~/.ssh/config`, and use `git@github.com:` remotes.
@@ -139,7 +139,7 @@ App repos deploy by calling `POST waynezhu.dev/deploy` with their image digest (
 
 - the repo belongs to `waynezhu6` (checked by account id, so a renamed account can't be impersonated),
 - it ran on `main`, and
-- the app is published (`apps/<name>.caddy`).
+- the app is registered (`apps/<name>.caddy`).
 
 The app is always the calling repo's own name, and the image is always `ghcr.io/waynezhu6/<app>-backend` at the given digest, so a repo can only deploy its own app's image and the endpoint never runs anything else. Each token can start one deploy. Nothing is stored in any repo; the server keeps its existing GHCR login to pull.
 

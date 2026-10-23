@@ -50,7 +50,7 @@ export function createApp(deps: ServerDeps) {
         const manifest = readManifest(body?.manifest);
         if (!existsSync(join(deps.infraDir, "apps", `${caller.app}.caddy`))) {
           return send(res, 404, {
-            error: `${caller.app} is not published. Run Actions > Publish app (or scripts/publish-app.sh ${caller.app}) in the infrastructure repo and merge the PR.`,
+            error: `${caller.app} is not registered. Run scripts/register-app.sh ${caller.app} in the infrastructure repo and merge the PR.`,
           });
         }
 

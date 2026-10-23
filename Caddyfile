@@ -1,6 +1,6 @@
 # Caddy configuration for the shared VPS.
-# Each app's routes live in apps/<name>.caddy, created by scripts/publish-app.sh
-# (or the "Publish app" workflow). Don't add app routes here.
+# Each app's routes live in apps/<name>.caddy, created by scripts/register-app.sh
+# (or the "Register app" workflow). Don't add app routes here.
 {
 	# Admin API for `caddy reload` and the healthcheck. Both run inside this
 	# container, so it only needs to listen on localhost, not on caddy-web

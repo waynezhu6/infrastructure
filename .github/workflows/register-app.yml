@@ -1,6 +1,6 @@
-name: Publish app
+name: Register app
 
-# Actions tab > Publish app > Run workflow. Opens a PR adding apps/<name>.caddy.
+# Actions tab > Register app > Run workflow. Opens a PR adding apps/<name>.caddy.
 # Merging it lets the app deploy and serves it under waynezhu.dev. Its database
 # and the like come from the app's own infra.yml, on its deploys.
 # Needs Settings > Actions > General > "Allow GitHub Actions to create and
@@ -18,7 +18,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  publish:
+  register:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,7 +26,7 @@ jobs:
       - name: Generate app config
         env:
           NAME: ${{ inputs.name }}
-        run: scripts/publish-app.sh "$NAME"
+        run: scripts/register-app.sh "$NAME"
 
       - name: Validate Caddy config
         run: docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$PWD/apps:/etc/caddy/apps:ro" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
@@ -34,9 +34,9 @@ jobs:
       - name: Open PR
         uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
         with:
-          branch: publish-app/${{ inputs.name }}
-          commit-message: Publish app ${{ inputs.name }}
-          title: Publish app ${{ inputs.name }}
+          branch: register-app/${{ inputs.name }}
+          commit-message: Register app ${{ inputs.name }}
+          title: Register app ${{ inputs.name }}
           body: |
             Adds `apps/${{ inputs.name }}.caddy`, serving `waynezhu.dev/apps/${{ inputs.name }}/` from `sites/${{ inputs.name }}` and `waynezhu.dev/api/${{ inputs.name }}/` from `${{ inputs.name }}-backend:3001`.
 

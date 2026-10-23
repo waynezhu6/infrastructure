@@ -57,12 +57,12 @@ test("a failed deploy ends with a failed verdict", async () => {
   assert.match(text, /Deploy failed: unhealthy\n==> deploy \w+ failed\n$/);
 });
 
-test("rejects bad bodies, unpublished apps, bad and reused tokens", async () => {
+test("rejects bad bodies, unregistered apps, bad and reused tokens", async () => {
   assert.equal((await post("reader", { digest: "latest" })).status, 400);
   assert.equal((await post("reader", "nope")).status, 400);
-  const unpublished = await post("ghost", { digest: digest("c") });
-  assert.equal(unpublished.status, 404);
-  assert.match((await unpublished.json()).error, /ghost is not published.*publish-app\.sh ghost/);
+  const unregistered = await post("ghost", { digest: digest("c") });
+  assert.equal(unregistered.status, 404);
+  assert.match((await unregistered.json()).error, /register-app\.sh ghost/);
   assert.equal((await fetch(`${base}/deploy`, { method: "POST", body: "{}" })).status, 401);
 
   const headers = { Authorization: "Bearer notes:same" };

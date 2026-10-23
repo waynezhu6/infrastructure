@@ -35,7 +35,7 @@ jobs:
       # bind mount of the Caddyfile sees the new contents on reload.
       # No --delete, so server-only files (.env, sites/, secrets/, backups) are
       # never removed. apps/ is the exception: it mirrors the repo exactly, so
-      # deleting an app's file unpublishes it.
+      # deleting an app's file unregisters it.
       - name: Copy files to server
         env:
           TARGET: ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
