@@ -16,16 +16,26 @@ export interface DeployDeps {
 // Where the app image keeps its built frontend (app-template's Dockerfile).
 export const FRONTEND_IN_IMAGE = "/app/frontend/dist";
 
-// One deploy:
+// The label app.compose.yml puts on every backend container, so a deploy can
+// find the ones it replaces whatever they're called.
+export const APP_LABEL = "deployer.app";
+
+// How long an old backend gets to finish its requests before it's killed.
+export const STOP_TIMEOUT_S = 30;
+
+// One deploy, blue-green on the one server:
 //   0. provision what the app's infra.yml asks for (provision.ts)
 //   1. pull the image by digest
 //   2. copy its frontend out into a staging folder
-//   3. start the backend container from it (docker compose, app.compose.yml)
-//   4. wait for /api/health
-//   5. on success, switch the frontend over and record the new image;
-//      on failure, put the previous image back and leave the frontend alone.
-// The previous image stays tagged locally as local/<app>-backend:current until
-// a deploy succeeds, so a rollback never needs the registry.
+//   3. start a new backend container, <app>-backend-<deploy id>, next to the
+//      one serving (docker compose, app.compose.yml), not yet reachable as
+//      <app>-backend
+//   4. wait for its /api/health
+//   5. on success, give it the <app>-backend alias Caddy proxies to, switch
+//      the frontend over, record the new image and stop the old container;
+//      on failure, remove only the new container, so the old one never stops
+//      serving, and leave the frontend alone.
+// The previous image stays tagged locally as local/<app>-backend:previous.
 export function createRunner(deps: DeployDeps): Runner {
   const { config, store, exec } = deps;
 
@@ -33,7 +43,10 @@ export function createRunner(deps: DeployDeps): Runner {
     const { app, digest } = job.req;
     const image = `${config.registry}/${config.owner.toLowerCase()}/${app}-backend@${digest}`;
     const local = `local/${app}-backend`;
-    const container = `${app}-backend`;
+    // Caddy proxies to this name. Containers from before blue-green deploys
+    // were called it; since then it's a network alias of the live one.
+    const alias = `${app}-backend`;
+    const container = `${alias}-${job.id}`;
     const sites = join(config.infraDir, "sites");
     const staged = join(sites, `.${app}.${job.id}`);
     const appDir = join(config.dataDir, "apps", app);
@@ -56,18 +69,28 @@ export function createRunner(deps: DeployDeps): Runner {
     job.log(`==> Pulling ${image}`);
     await run(["pull", "--quiet", image]);
 
-    // What to roll back to. The first deploy through here adopts whatever
-    // container is already running (from the old SSH deploy, say).
+    // The containers this deploy replaces: the live one, plus any left behind
+    // by a deploy the deployer didn't get to finish.
+    const old = ((await quiet(["ps", "--all", "--filter", `label=${APP_LABEL}=${app}`, "--format", "{{.Names}}"])) ?? "")
+      .split("\n")
+      .filter(Boolean);
+    if (!old.includes(alias) && (await quiet(["container", "inspect", "--format", "{{.Name}}", alias])) !== undefined) old.push(alias);
+    job.log(old.length ? `    Serving now: ${old.join(", ")}` : "    Nothing serving yet.");
+
+    // The image to keep as :previous. The first deploy through here adopts
+    // whatever container is already running (from the old SSH deploy, say).
     let previous = await quiet(["image", "inspect", "--format", "{{.Id}}", `${local}:current`]);
-    if (!previous) {
-      const running = await quiet(["container", "inspect", "--format", "{{.Image}}", container]);
+    if (!previous && old.length) {
+      const running = await quiet(["container", "inspect", "--format", "{{.Image}}", old[0]]);
       if (running) {
         await run(["tag", running, `${local}:current`]);
         previous = running;
       }
     }
-    job.log(previous ? `    Rollback target: ${previous.slice(0, 19)}` : "    No previous image; nothing to roll back to.");
 
+    // Until the new container has the alias, a failure removes it and nothing
+    // else changes.
+    let live = false;
     try {
       job.log("==> Unpacking frontend");
       const tmp = `deploy-${job.id}`;
@@ -88,47 +111,67 @@ export function createRunner(deps: DeployDeps): Runner {
       const envFile = join(appDir, "app.env");
       writeFileSync(envFile, appEnv(existsSync(secrets) ? readFileSync(secrets, "utf8") : "", job.req.env), { mode: 0o600 });
 
-      const up = (img: string) =>
-        run(["compose", "--project-name", app, "--file", config.composeFile, "up", "--detach", "--pull", "never", "--remove-orphans"], {
-          ...process.env,
-          APP: app,
-          IMAGE: img,
-          APP_ENV_FILE: envFile,
-        });
-
-      job.log("==> Starting backend");
-      await up(image);
+      job.log(`==> Starting ${container} next to ${old.length ? "the one serving" : "nothing"}`);
+      // A compose project per container, so starting this one never touches
+      // the one serving.
+      await run(["compose", "--project-name", `${app}-${job.id}`, "--file", config.composeFile, "up", "--detach", "--pull", "never"], {
+        ...process.env,
+        APP: app,
+        CONTAINER: container,
+        IMAGE: image,
+        APP_ENV_FILE: envFile,
+      });
 
       job.log(`==> Waiting for http://${container}:3001/api/health`);
-      const healthy = await waitHealthy(deps, job, container);
-
-      if (!healthy) {
+      if (!(await waitHealthy(deps, job, container))) {
         job.log("==> Backend never became healthy. Its last log lines:");
         await exec("docker", ["logs", "--tail", "40", container], { onLine: (l) => job.log(`  | ${l}`) });
-        if (previous) {
-          job.log("==> Rolling back to the previous image");
-          await up(`${local}:current`);
-          job.log((await waitHealthy(deps, job, container)) ? "    Previous image is back up." : "    The previous image isn't healthy either; check the server.");
-        }
-        throw new Error("health check failed; the frontend was not changed");
+        throw new Error(
+          `health check failed; ${old.length ? "the old backend kept serving throughout" : "nothing was serving before either"} and the frontend was not changed`,
+        );
       }
 
+      // Docker can't add an alias to a network the container is already on,
+      // so join caddy-web again with it. Nothing reaches this container by
+      // that network yet, so nothing notices.
+      job.log(`==> Routing ${alias} to ${container}`);
+      await run(["network", "disconnect", "caddy-web", container]);
+      await run(["network", "connect", "--alias", alias, "caddy-web", container]);
+      live = true;
+    } catch (err) {
+      if (!live) await quiet(["rm", "--force", container]);
+      rmSync(staged, { recursive: true, force: true });
+      throw err;
+    }
+
+    try {
       job.log("==> Switching frontend");
-      const live = join(sites, app);
-      const old = join(sites, `.${app}.old-${job.id}`);
-      if (existsSync(live)) renameSync(live, old);
-      renameSync(staged, live);
-      rmSync(old, { recursive: true, force: true });
+      const current = join(sites, app);
+      const replaced = join(sites, `.${app}.old-${job.id}`);
+      if (existsSync(current)) renameSync(current, replaced);
+      renameSync(staged, current);
+      rmSync(replaced, { recursive: true, force: true });
 
       if (previous) await run(["tag", `${local}:current`, `${local}:previous`]);
       await run(["tag", image, `${local}:current`]);
       store.setCurrent(job.req, job.id);
-      // Untagged images are older deploys, already replaced twice.
-      await quiet(["image", "prune", "--force"]);
-      job.log(`==> ${app} is live on ${digest}`);
     } finally {
       rmSync(staged, { recursive: true, force: true });
     }
+
+    // Both containers serve until here. The old one gets SIGTERM, finishes
+    // the requests it has (app-template's backend closes its server on it),
+    // and is killed after STOP_TIMEOUT_S if it doesn't exit; Caddy retries any
+    // request that lands on it meanwhile.
+    for (const name of old) {
+      job.log(`==> Stopping ${name}`);
+      if ((await quiet(["stop", "--time", String(STOP_TIMEOUT_S), name])) === undefined || (await quiet(["rm", name])) === undefined) {
+        job.log(`    Couldn't remove ${name}; it may still be serving next to ${container}. Remove it by hand: docker rm -f ${name}`);
+      }
+    }
+    // Untagged images are older deploys, already replaced twice.
+    await quiet(["image", "prune", "--force"]);
+    job.log(`==> ${app} is live on ${digest}`);
   };
 }
 

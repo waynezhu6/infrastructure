@@ -20,9 +20,13 @@ interface Pg {
 
 function setup(opts: {
   previous?: string;
-  running?: string;
+  // Backend containers already there: the deployer's (labelled), or one from
+  // before blue-green deploys, called reader-backend.
+  labelled?: string[];
+  legacy?: boolean;
   healthy?: (call: number) => boolean;
   env?: Record<string, string>;
+  fail?: (args: string[]) => boolean;
   manifest?: Manifest;
   pg?: Partial<Pg>;
 }) {
@@ -40,6 +44,7 @@ function setup(opts: {
   const exec: Exec = async (cmd, args, o) => {
     if (cmd !== "docker") return { code: 0, stdout: "" };
     calls.push({ args, env: o?.env });
+    if (opts.fail?.(args)) return { code: 1, stdout: "" };
     const [a, b] = args;
     if (a === "exec" && b === "postgres") {
       const sql = args.at(-1)!;
@@ -52,8 +57,13 @@ function setup(opts: {
       if (sql.startsWith("CREATE DATABASE")) pg.databases.add(name);
       return { code: 0, stdout: "" };
     }
+    if (a === "ps") return { code: 0, stdout: (opts.labelled ?? []).map((n) => `${n}\n`).join("") };
     if (a === "image" && b === "inspect") return opts.previous ? { code: 0, stdout: opts.previous } : { code: 1, stdout: "" };
-    if (a === "container" && b === "inspect") return opts.running ? { code: 0, stdout: opts.running } : { code: 1, stdout: "" };
+    if (a === "container" && b === "inspect") {
+      const name = args.at(-1)!;
+      const exists = (opts.legacy && name === "reader-backend") || opts.labelled?.includes(name);
+      return exists ? { code: 0, stdout: args[3] === "{{.Image}}" ? `sha256:image-of-${name}` : `/${name}` } : { code: 1, stdout: "" };
+    }
     if (a === "cp") {
       mkdirSync(args[2]);
       writeFileSync(join(args[2], "index.html"), "new");
@@ -61,7 +71,11 @@ function setup(opts: {
     return { code: 0, stdout: "" };
   };
   let healthCalls = 0;
-  const fetchFake = (async () => ({ ok: (opts.healthy ?? (() => true))(healthCalls++), status: 200 })) as unknown as typeof fetch;
+  const health: string[] = [];
+  const fetchFake = (async (url: string) => {
+    health.push(url);
+    return { ok: (opts.healthy ?? (() => true))(healthCalls++), status: 200 };
+  }) as unknown as typeof fetch;
 
   const store = new Store(dataDir);
   const deployer = new Deployer(createRunner({ config, store, exec, fetch: fetchFake, sleep: async () => {} }), store);
@@ -70,62 +84,104 @@ function setup(opts: {
       const job = deployer.submit({ app: "reader", digest, repository: "waynezhu6/reader", sha: "abcdef0", runId: "1", env: opts.env ?? {}, manifest: opts.manifest });
       job.once("done", () => resolve(job));
     });
-  const docker = () => calls.map((c) => c.args.slice(0, 2).join(" "));
-  return { infraDir, dataDir, calls, docker, run, store, pg };
+  const docker = () => calls.map((c) => c.args.join(" "));
+  // The order of the calls matching each pattern, so tests can check one came before another.
+  const index = (pattern: RegExp) => docker().findIndex((c) => pattern.test(c));
+  return { infraDir, dataDir, calls, docker, index, health, run, store, pg };
 }
 
-test("a healthy deploy switches the frontend and records the image", async () => {
-  const { infraDir, dataDir, calls, run, store } = setup({ previous: "sha256:prev" });
+test("a healthy deploy starts a new container, routes to it, then retires the old one", async () => {
+  const { infraDir, dataDir, calls, docker, index, health, run, store } = setup({ previous: "sha256:prev", labelled: ["reader-backend-0123456789ab"] });
   const job = await run();
   assert.equal(job.status, "succeeded", job.lines.join("\n"));
+  const container = `reader-backend-${job.id}`;
 
   const image = `ghcr.io/waynezhu6/reader-backend@${digest}`;
   assert.deepEqual(calls[0].args, ["pull", "--quiet", image]);
+  assert.deepEqual(calls[1].args, ["ps", "--all", "--filter", "label=deployer.app=reader", "--format", "{{.Names}}"]);
   const up = calls.find((c) => c.args[0] === "compose")!;
-  assert.deepEqual(up.args.slice(0, 5), ["compose", "--project-name", "reader", "--file", "/app/app.compose.yml"]);
+  assert.deepEqual(up.args.slice(0, 5), ["compose", "--project-name", `reader-${job.id}`, "--file", "/app/app.compose.yml"]);
   assert.equal(up.env?.IMAGE, image);
   assert.equal(up.env?.APP, "reader");
+  assert.equal(up.env?.CONTAINER, container);
+  assert.deepEqual(health, [`http://${container}:3001/api/health`]);
+
+  // The alias moves only once the new container is healthy, and the old one
+  // stops only after that.
+  const connect = index(new RegExp(`^network connect --alias reader-backend caddy-web ${container}$`));
+  assert.ok(index(new RegExp(`^network disconnect caddy-web ${container}$`)) < connect);
+  assert.ok(connect > index(/^compose /));
+  assert.ok(index(/^stop --time 30 reader-backend-0123456789ab$/) > connect);
+  assert.ok(index(/^rm reader-backend-0123456789ab$/) > index(/^stop /));
+  assert.ok(!docker().some((c) => c.includes(`rm --force ${container}`) || c === `stop --time 30 ${container}`));
 
   assert.equal(readFileSync(join(infraDir, "sites", "reader", "index.html"), "utf8"), "new");
   assert.deepEqual(readdirSync(join(infraDir, "sites")), ["reader"]);
   assert.equal(readFileSync(join(dataDir, "apps", "reader", "app.env"), "utf8"), "NODE_ENV=production\nPORT=3001\nDATABASE_URL=postgres://x\nREADER_KEY=k\n");
   assert.equal(store.current("reader"), digest);
-  assert.ok(calls.some((c) => c.args.join(" ") === "tag local/reader-backend:current local/reader-backend:previous"));
-  assert.ok(calls.some((c) => c.args.join(" ") === `tag ${image} local/reader-backend:current`));
+  assert.ok(docker().includes("tag local/reader-backend:current local/reader-backend:previous"));
+  assert.ok(docker().includes(`tag ${image} local/reader-backend:current`));
 });
 
-test("an unhealthy deploy rolls back and leaves the frontend alone", async () => {
-  // Unhealthy until the rollback has started.
-  let rolledBack = false;
-  const { infraDir, calls, run, store } = setup({ previous: "sha256:prev", healthy: () => rolledBack });
-  const origPush = calls.push.bind(calls);
-  calls.push = (...items) => {
-    if (items[0].env?.IMAGE === "local/reader-backend:current") rolledBack = true;
-    return origPush(...items);
-  };
+test("an unhealthy deploy removes only the new container; the old one never stops", async () => {
+  const { infraDir, docker, run, store } = setup({ previous: "sha256:prev", labelled: ["reader-backend-0123456789ab"], healthy: () => false });
   const job = await run();
+  const container = `reader-backend-${job.id}`;
 
   assert.equal(job.status, "failed");
-  assert.ok(job.lines.some((l) => /Previous image is back up/.test(l)), job.lines.join("\n"));
-  assert.ok(job.lines.some((l) => /health check failed/.test(l)));
+  assert.match(job.lines.join("\n"), /health check failed; the old backend kept serving throughout/);
+  assert.ok(docker().includes(`logs --tail 40 ${container}`));
+  assert.ok(docker().includes(`rm --force ${container}`));
+  assert.ok(!docker().some((c) => /^(stop|network)/.test(c) || c === "rm reader-backend-0123456789ab"));
+  assert.equal(docker().filter((c) => c.startsWith("compose")).length, 1);
   assert.equal(readFileSync(join(infraDir, "sites", "reader", "index.html"), "utf8"), "old");
   assert.deepEqual(readdirSync(join(infraDir, "sites")), ["reader"]);
   assert.equal(store.current("reader"), undefined);
-  assert.ok(!calls.some((c) => c.args[0] === "tag" && c.args[2] === "local/reader-backend:current"));
+  assert.ok(!docker().some((c) => c.startsWith("tag") && c.endsWith("local/reader-backend:current")));
 });
 
-test("the first deploy adopts the container already running as its rollback target", async () => {
-  const { calls, run } = setup({ running: "sha256:running" });
-  const job = await run();
-  assert.equal(job.status, "succeeded", job.lines.join("\n"));
-  assert.deepEqual(calls.find((c) => c.args[0] === "tag")!.args, ["tag", "sha256:running", "local/reader-backend:current"]);
-});
-
-test("with nothing to roll back to, a failure just reports", async () => {
-  const { calls, run } = setup({ healthy: () => false });
+test("if routing to the new container fails, it's removed and the old one keeps serving", async () => {
+  const { infraDir, docker, run, store } = setup({ previous: "sha256:prev", labelled: ["reader-backend-0123456789ab"], fail: (a) => a[1] === "connect" });
   const job = await run();
   assert.equal(job.status, "failed");
-  assert.equal(calls.filter((c) => c.args[0] === "compose").length, 1);
+  assert.ok(docker().includes(`rm --force reader-backend-${job.id}`));
+  assert.ok(!docker().some((c) => c.startsWith("stop")));
+  assert.equal(readFileSync(join(infraDir, "sites", "reader", "index.html"), "utf8"), "old");
+  assert.deepEqual(readdirSync(join(infraDir, "sites")), ["reader"]);
+  assert.equal(store.current("reader"), undefined);
+});
+
+test("the first deploy adopts the pre-blue-green reader-backend container, then retires it", async () => {
+  const { docker, run } = setup({ legacy: true });
+  const job = await run();
+  assert.equal(job.status, "succeeded", job.lines.join("\n"));
+  assert.equal(docker().find((c) => c.startsWith("tag")), "tag sha256:image-of-reader-backend local/reader-backend:current");
+  assert.ok(docker().includes(`network connect --alias reader-backend caddy-web reader-backend-${job.id}`));
+  assert.ok(docker().indexOf("stop --time 30 reader-backend") > docker().findIndex((c) => c.startsWith("network connect")));
+  assert.ok(docker().includes("rm reader-backend"));
+});
+
+test("containers left by an unfinished deploy are retired along with the live one", async () => {
+  const { docker, run } = setup({ previous: "sha256:prev", labelled: ["reader-backend-0123456789ab", "reader-backend-ba9876543210"], legacy: true });
+  const job = await run();
+  assert.equal(job.status, "succeeded", job.lines.join("\n"));
+  for (const name of ["reader-backend-0123456789ab", "reader-backend-ba9876543210", "reader-backend"]) assert.ok(docker().includes(`rm ${name}`), name);
+});
+
+test("an old container that won't stop is reported, but the deploy still succeeds", async () => {
+  const { run, store } = setup({ previous: "sha256:prev", labelled: ["reader-backend-0123456789ab"], fail: (a) => a[0] === "stop" });
+  const job = await run();
+  assert.equal(job.status, "succeeded", job.lines.join("\n"));
+  assert.match(job.lines.join("\n"), /Couldn't remove reader-backend-0123456789ab.*docker rm -f reader-backend-0123456789ab/);
+  assert.equal(store.current("reader"), digest);
+});
+
+test("with nothing serving before, a failure just reports", async () => {
+  const { docker, run } = setup({ healthy: () => false });
+  const job = await run();
+  assert.equal(job.status, "failed");
+  assert.match(job.lines.join("\n"), /nothing was serving before either/);
+  assert.equal(docker().filter((c) => c.startsWith("compose")).length, 1);
 });
 
 test("an app without infra.yml or secrets gets only NODE_ENV and PORT", async () => {

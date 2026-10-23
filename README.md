@@ -114,7 +114,7 @@ This repo is public so app repos, public or private, can use its deploy action. 
 
 Lines added by hand to `~/infrastructure/secrets/<name>.env` on the server still work too; a GitHub secret of the same name wins. Provisioning only reads the `DATABASE_URL` line and only ever appends it, so added lines survive deploys.
 
-**Removing a project**: delete `apps/<name>.caddy` by PR (unregistering it). On deploy Caddy stops serving it and the deployer refuses its deploys. The container, database, `secrets/<name>.env` and `sites/<name>` are left in place on purpose; remove them by hand once you're sure (`docker rm -f <name>-backend`, `docker exec -it postgres psql -U postgres -c 'DROP DATABASE <name>'` etc.).
+**Removing a project**: delete `apps/<name>.caddy` by PR. On deploy Caddy stops serving it and the deployer refuses its deploys. The container, database, `secrets/<name>.env` and `sites/<name>` are left in place on purpose; remove them by hand once you're sure (`docker rm -f $(docker ps -aq --filter label=deployer.app=<name>)`, `docker exec -it postgres psql -U postgres -c 'DROP DATABASE <name>'` etc.).
 
 ## CI/CD
 
@@ -143,7 +143,17 @@ App repos deploy by calling `POST waynezhu.dev/deploy` with their image digest (
 
 The app is always the calling repo's own name, and the image is always `ghcr.io/waynezhu6/<app>-backend` at the given digest, so a repo can only deploy its own app's image and the endpoint never runs anything else. Each token can start one deploy. Nothing is stored in any repo; the server keeps its existing GHCR login to pull.
 
-**What a deploy does.** Provision what the app's `infra.yml` declares (see above); pull the image by digest; copy the frontend out of it (`/app/frontend/dist`); start the backend from `deployer/app.compose.yml` (container `<app>-backend` on `caddy-web` and `postgres-db`, environment from `secrets/<app>.env` plus the app repo's Actions secrets); wait up to 90 s for `/api/health`. If it's healthy, the new frontend replaces `sites/<app>` and the deploy succeeds. If not, the last 40 log lines are shown, the previous image is started again and the frontend is left as it was, so a bad push doesn't take the app down.
+**What a deploy does.** Blue-green, on the one server, so the app keeps answering throughout. First provision what the app's `infra.yml` declares (see above). Then pull the image by digest and copy the frontend out of it (`/app/frontend/dist`). Start a new backend container, `<app>-backend-<deploy id>`, from `deployer/app.compose.yml` next to the one serving (on `caddy-web` and `postgres-db`, environment from `secrets/<app>.env` plus the app repo's Actions secrets), and wait up to 90 s for its `/api/health`. If it's healthy, it takes over the `<app>-backend` name Caddy proxies to (a network alias on `caddy-web`), the new frontend replaces `sites/<app>`, and the old container is stopped: it gets SIGTERM and up to 30 s to finish the requests it has. If the new one never gets healthy, its last 40 log lines are shown, it's removed, and nothing else changes: the old container never stopped serving and the frontend is left as it was, so a bad push doesn't take the app down.
+
+The swap itself: Caddy opens a fresh connection to the backend for each request (`keepalive off` in `apps/<name>.caddy`), and a connection that fails is retried for up to 5 s. GET requests that hit the old container as it shuts down are retried too. A POST or other non-GET can still fail in the few milliseconds when the old backend stops listening, if it was accepted but not yet read.
+
+What this asks of apps:
+
+- **Two versions run at once, briefly.** The new backend runs its migrations on startup while the old one is still serving, so a migration must not break the old code: add columns and tables freely; drop or rename only in a later deploy, once nothing uses them. Anything the app does on a timer runs in both containers for those seconds.
+- **Twice the memory during a deploy.** Both backends are up from the new one's start until the old one exits. Leave room for that on the server.
+- **Exit on SIGTERM.** app-template's backend stops taking connections, finishes what it has and exits. An app that ignores SIGTERM (Node running as PID 1 does, unless it handles it) keeps serving until it's killed after 30 s, and requests in flight at that moment fail.
+
+Containers from before blue-green deploys were called `<app>-backend`; the first deploy since adopts and replaces it the same way. If a deploy is cut off midway (the deployer restarting, say), the next one removes whatever it left.
 
 **Output.** The request stays open and the deploy's output streams into the Actions log as it happens, ending with `==> deploy <id> succeeded|failed|superseded`, which passes or fails the step. If the connection drops the deploy carries on and the action follows it at `GET /deploy/jobs/<id>`. Every deploy's log is also kept at `~/infrastructure/deploys/logs/<app>/<id>.log`.
 
@@ -153,7 +163,7 @@ The app is always the calling repo's own name, and the image is always `ghcr.io/
 
 Restarting the deployer (any deploy of this repo that changes `deployer/`) waits for running deploys to finish first.
 
-Apps created before the deployer still deploy over SSH with `SERVER_HOST`, `SERVER_USER` and `SSH_DEPLOY_KEY` until their workflow and Dockerfile are updated from app-template; the first deploy through the deployer adopts the running container as its rollback target.
+Apps created before the deployer still deploy over SSH with `SERVER_HOST`, `SERVER_USER` and `SSH_DEPLOY_KEY` until their workflow and Dockerfile are updated from app-template; the first deploy through the deployer adopts the running container and replaces it.
 
 ## Common Commands
 
@@ -166,6 +176,7 @@ docker compose down
 docker compose logs -f
 docker compose logs -f caddy
 ls ~/infrastructure/deploys/logs/<app>/     # one file per app deploy
+docker ps --filter label=deployer.app=<app> # an app's backend (two during a deploy)
 
 # Reload Caddy after a manual Caddyfile change
 docker exec caddy caddy reload --config /etc/caddy/Caddyfile

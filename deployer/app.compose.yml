@@ -1,12 +1,17 @@
 # How every app's backend runs. The deployer fills these in for each deploy:
 #   APP           the app name, from its repo name
+#   CONTAINER     <app>-backend-<deploy id>; each deploy starts a new one
+#                 next to the one serving (its own compose project)
 #   IMAGE         the image to run, pinned by digest
 #   APP_ENV_FILE  NODE_ENV and PORT, secrets/<app>.env and the app repo's secrets
-# Caddy reaches the backend by its container name, <app>-backend, on port 3001.
+# Caddy reaches the backend as <app>-backend on port 3001: a caddy-web alias
+# the deployer gives the new container once it's healthy.
 services:
   backend:
     image: ${IMAGE:?}
-    container_name: ${APP:?}-backend
+    container_name: ${CONTAINER:?}
+    labels:
+      deployer.app: ${APP:?}
     restart: unless-stopped
     env_file: ${APP_ENV_FILE:?}
     networks:
