@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Client side of the deployer (deployer/src/server.ts). Run by action.yml with
-# DIGEST, DEPLOY_URL and DEPLOY_ENV set.
+# DIGEST, DEPLOY_URL, DEPLOY_ENV and MANIFEST set.
 set -euo pipefail
 
 if ! [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
@@ -22,6 +22,14 @@ if ! body="$(jq -cn --arg digest "$DIGEST" --arg env "${DEPLOY_ENV:-}" '
   | {digest: $digest, env: .}' 2>/dev/null)"; then
   echo "::error::The env input must be NAME=value lines, e.g. RAPIDAPI_KEY=\${{ secrets.RAPIDAPI_KEY }}."
   exit 1
+fi
+
+# The app's infra.yml goes as text; the server parses it and says what's wrong.
+manifest="${GITHUB_WORKSPACE:-.}/${MANIFEST:-infra.yml}"
+if [ -f "$manifest" ]; then
+  body="$(jq -c --rawfile manifest "$manifest" '. + {manifest: $manifest}' <<<"$body")"
+else
+  echo "::notice::No ${MANIFEST:-infra.yml} in the repo, so the server provisions nothing for this app (no database). See infrastructure's README."
 fi
 
 # A fresh token per request: they're short-lived and each may start one deploy.

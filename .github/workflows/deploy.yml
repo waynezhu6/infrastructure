@@ -35,7 +35,7 @@ jobs:
       # bind mount of the Caddyfile sees the new contents on reload.
       # No --delete, so server-only files (.env, sites/, secrets/, backups) are
       # never removed. apps/ is the exception: it mirrors the repo exactly, so
-      # deleting an app's file unregisters it.
+      # deleting an app's file unpublishes it.
       - name: Copy files to server
         env:
           TARGET: ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
@@ -56,7 +56,9 @@ jobs:
           printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD" > deploy.env
           scp deploy.env "$TARGET:~/infrastructure/.env"
 
-      - name: Start services, create app databases, reload Caddy
+      # App databases are created by the deployer on each app's deploy, from
+      # its infra.yml (deployer/src/provision.ts).
+      - name: Start services, reload Caddy
         env:
           TARGET: ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
         run: |
@@ -64,5 +66,4 @@ jobs:
             cd ~/infrastructure
             chmod 600 .env
             docker compose up -d --build
-            scripts/provision-dbs.sh
             docker exec caddy caddy reload --config /etc/caddy/Caddyfile'

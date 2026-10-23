@@ -44,6 +44,6 @@ export function loadConfig(): Config {
   };
 }
 
-// Same rule as scripts/register-app.sh.
+// Same rule as scripts/publish-app.sh.
 export const APP_NAME = /^[a-z0-9][a-z0-9-]{0,40}$/;
 export const DIGEST = /^sha256:[a-f0-9]{64}$/;

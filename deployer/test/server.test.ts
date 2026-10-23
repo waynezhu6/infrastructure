@@ -57,12 +57,12 @@ test("a failed deploy ends with a failed verdict", async () => {
   assert.match(text, /Deploy failed: unhealthy\n==> deploy \w+ failed\n$/);
 });
 
-test("rejects bad bodies, unregistered apps, bad and reused tokens", async () => {
+test("rejects bad bodies, unpublished apps, bad and reused tokens", async () => {
   assert.equal((await post("reader", { digest: "latest" })).status, 400);
   assert.equal((await post("reader", "nope")).status, 400);
-  const unregistered = await post("ghost", { digest: digest("c") });
-  assert.equal(unregistered.status, 404);
-  assert.match((await unregistered.json()).error, /register-app\.sh ghost/);
+  const unpublished = await post("ghost", { digest: digest("c") });
+  assert.equal(unpublished.status, 404);
+  assert.match((await unpublished.json()).error, /ghost is not published.*publish-app\.sh ghost/);
   assert.equal((await fetch(`${base}/deploy`, { method: "POST", body: "{}" })).status, 401);
 
   const headers = { Authorization: "Bearer notes:same" };
@@ -111,6 +111,19 @@ test("passes env through and rejects server-owned or unsafe names and values", a
   const res = await post("notes", { digest: digest("e"), env: { RAPIDAPI_KEY: "k" } });
   assert.equal(res.status, 200);
   assert.deepEqual(deployer.get(res.headers.get("x-deploy-id")!)!.req.env, { RAPIDAPI_KEY: "k" });
+  await res.body!.cancel();
+  release(true);
+});
+
+test("parses infra.yml and refuses a bad one before deploying", async () => {
+  for (const manifest of ["postgress: true", "postgres: yes please", "[1, 2]", "a: [", 42]) {
+    const res = await post("notes", { digest: digest("f"), manifest });
+    assert.equal(res.status, 400, JSON.stringify(manifest));
+    assert.match((await res.json()).error, /infra\.yml/);
+  }
+  const res = await post("notes", { digest: digest("f"), manifest: "# what notes needs\npostgres: true\n" });
+  assert.equal(res.status, 200);
+  assert.deepEqual(deployer.get(res.headers.get("x-deploy-id")!)!.req.manifest, { postgres: true });
   await res.body!.cancel();
   release(true);
 });
