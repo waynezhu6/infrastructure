@@ -6,7 +6,10 @@
 set -euo pipefail
 
 file="${1:-$(find "${BACKUP_DIR:-/backups}" -maxdepth 1 -name 'backup-*.tar*' ! -name '*.partial' | sort -r | head -n 1)}"
-[ -n "$file" ] && [ -f "$file" ] || { echo "No backup found" >&2; exit 1; }
+if [ -z "$file" ] || [ ! -f "$file" ]; then
+  echo "No backup found" >&2
+  exit 1
+fi
 echo "==> Restoring $file into a throwaway Postgres"
 
 work="$(mktemp -d)"
