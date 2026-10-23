@@ -6,7 +6,7 @@
 #
 # Usage: scripts/register-app.sh <name>
 #   <name>  the app repo's name, lowercased (e.g. notes). The app's backend
-#           container must be <name>-backend; app-template does this.
+#           backend must be reachable as <name>-backend; the deployer does this.
 
 set -euo pipefail
 
