@@ -18,6 +18,13 @@ inputs:
       malicious. Values must be single-line; NODE_ENV, PORT and DATABASE_URL
       are the server's and can't be set here.
     default: ""
+  manifest:
+    description: >
+      The app's infra.yml, relative to the checkout: what the server should
+      provision for it (e.g. "postgres: true"). Sent with each deploy; if the
+      file doesn't exist, nothing is provisioned. The job must check out the
+      repo first.
+    default: infra.yml
   url:
     description: The deployer's address. Also the OIDC audience.
     default: https://waynezhu.dev/deploy
@@ -31,4 +38,5 @@ runs:
         DIGEST: ${{ inputs.digest }}
         DEPLOY_URL: ${{ inputs.url }}
         DEPLOY_ENV: ${{ inputs.env }}
+        MANIFEST: ${{ inputs.manifest }}
       run: "$GITHUB_ACTION_PATH/deploy.sh"

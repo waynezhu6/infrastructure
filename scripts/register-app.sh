@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Registers an app: writes apps/<name>.caddy from the template.
-# Merging that file to main makes the next deploy serve the app at
-# waynezhu.dev/apps/<name>/ (frontend) and waynezhu.dev/api/<name>/ (backend),
-# and create its database (see scripts/provision-dbs.sh).
+# Merging that file to main lets the app deploy, and makes the next deploy of
+# this repo serve it at waynezhu.dev/apps/<name>/ (frontend) and
+# waynezhu.dev/api/<name>/ (backend). What the app needs besides (its database)
+# comes from its own infra.yml, provisioned by the deployer on each app deploy.
 #
 # Usage: scripts/register-app.sh <name>
 #   <name>  the app repo's name, lowercased (e.g. notes). The app's backend

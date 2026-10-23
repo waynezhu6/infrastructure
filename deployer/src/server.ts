@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { AuthError, ReplayGuard, type Verifier } from "./auth.js";
 import { DIGEST } from "./config.js";
 import type { Deployer, Job } from "./jobs.js";
+import { ManifestError, parseManifest, type Manifest } from "./manifest.js";
 
 export interface ServerDeps {
   verify: Verifier;
@@ -13,10 +14,12 @@ export interface ServerDeps {
 
 // The deploy API, served by Caddy at waynezhu.dev/deploy:
 //
-//   POST /deploy             {"digest": "sha256:...", "env": {"NAME": "value"}}
+//   POST /deploy             {"digest": "sha256:...", "env": {"NAME": "value"}, "manifest": "<infra.yml>"}
 //                            start (or join) a deploy of the calling repo's
 //                            app; env (optional) is extra environment for its
-//                            backend, from the app repo's GitHub secrets. The response streams
+//                            backend, from the app repo's GitHub secrets;
+//                            manifest (optional) is the text of its infra.yml,
+//                            what to provision for it (manifest.ts). The response streams
 //                            the deploy's output and ends with the verdict line
 //                            "==> deploy <id> <succeeded|failed|superseded>".
 //   GET  /deploy/jobs/<id>   status and output of a deploy, as JSON, for a CI
@@ -44,11 +47,14 @@ export function createApp(deps: ServerDeps) {
         const digest = typeof body?.digest === "string" ? body.digest : "";
         if (!DIGEST.test(digest)) return send(res, 400, { error: 'body must be {"digest": "sha256:<64 hex>"}' });
         const env = parseEnv(body?.env);
+        const manifest = readManifest(body?.manifest);
         if (!existsSync(join(deps.infraDir, "apps", `${caller.app}.caddy`))) {
-          return send(res, 404, { error: `${caller.app} is not registered. Run scripts/register-app.sh ${caller.app} in the infrastructure repo and merge the PR.` });
+          return send(res, 404, {
+            error: `${caller.app} is not registered. Run scripts/register-app.sh ${caller.app} in the infrastructure repo and merge the PR.`,
+          });
         }
 
-        const job = deps.deployer.submit({ app: caller.app, digest, repository: caller.repository, sha: caller.sha, runId: caller.runId, env });
+        const job = deps.deployer.submit({ app: caller.app, digest, repository: caller.repository, sha: caller.sha, runId: caller.runId, env, manifest });
         return stream(res, job);
       }
 
@@ -117,6 +123,19 @@ function parseEnv(raw: unknown): Record<string, string> {
     env[name] = value;
   }
   return env;
+}
+
+// The app's infra.yml, checked here so a bad one fails the request with a
+// clear message rather than a deploy.
+function readManifest(raw: unknown): Manifest | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string") throw new BadRequest("manifest must be the text of infra.yml");
+  try {
+    return parseManifest(raw);
+  } catch (err) {
+    if (err instanceof ManifestError) throw new BadRequest(err.message);
+    throw err;
+  }
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown> | undefined> {

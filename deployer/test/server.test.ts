@@ -115,6 +115,19 @@ test("passes env through and rejects server-owned or unsafe names and values", a
   release(true);
 });
 
+test("parses infra.yml and refuses a bad one before deploying", async () => {
+  for (const manifest of ["postgress: true", "postgres: yes please", "[1, 2]", "a: [", 42]) {
+    const res = await post("notes", { digest: digest("f"), manifest });
+    assert.equal(res.status, 400, JSON.stringify(manifest));
+    assert.match((await res.json()).error, /infra\.yml/);
+  }
+  const res = await post("notes", { digest: digest("f"), manifest: "# what notes needs\npostgres: true\n" });
+  assert.equal(res.status, 200);
+  assert.deepEqual(deployer.get(res.headers.get("x-deploy-id")!)!.req.manifest, { postgres: true });
+  await res.body!.cancel();
+  release(true);
+});
+
 test("healthz needs no token", async () => {
   assert.equal((await fetch(`${base}/deploy/healthz`)).status, 200);
 });

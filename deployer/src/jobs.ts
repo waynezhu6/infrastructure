@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Manifest } from "./manifest.js";
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "superseded";
 
@@ -14,6 +15,8 @@ export interface DeployRequest {
   // Extra environment for the backend, from the app repo's GitHub secrets.
   // Kept in memory only: logs and state.json never see the values.
   env: Record<string, string>;
+  // The app repo's infra.yml; undefined when it has none.
+  manifest?: Manifest;
 }
 
 // Identifies what a deploy would put live: the image plus its environment, so
@@ -23,8 +26,14 @@ export function envHash(env: Record<string, string>): string {
   return createHash("sha256").update(JSON.stringify(sorted)).digest("hex");
 }
 
+// The manifest as it's compared and stored, so declaring a resource (a new
+// database, say) deploys again even if the image didn't change.
+function manifestKey(manifest?: Manifest): string {
+  return JSON.stringify(manifest ?? null);
+}
+
 function same(a: DeployRequest, b: DeployRequest): boolean {
-  return a.digest === b.digest && envHash(a.env) === envHash(b.env);
+  return a.digest === b.digest && envHash(a.env) === envHash(b.env) && manifestKey(a.manifest) === manifestKey(b.manifest);
 }
 
 // One deploy of one image. Its output is kept in memory for anyone attached
@@ -83,16 +92,20 @@ export class Store {
   // Whether this exact image and environment is what's live.
   isCurrent(req: DeployRequest): boolean {
     const state = this.state(req.app);
-    return state?.digest === req.digest && (state.env ?? envHash({})) === envHash(req.env);
+    return (
+      state?.digest === req.digest &&
+      (state.env ?? envHash({})) === envHash(req.env) &&
+      (state.manifest ?? manifestKey(undefined)) === manifestKey(req.manifest)
+    );
   }
 
   setCurrent(req: DeployRequest, job: string): void {
     mkdirSync(join(this.dataDir, "apps", req.app), { recursive: true });
-    const state = { digest: req.digest, env: envHash(req.env), job, at: new Date().toISOString() };
+    const state = { digest: req.digest, env: envHash(req.env), manifest: manifestKey(req.manifest), job, at: new Date().toISOString() };
     writeFileSync(this.stateFile(req.app), JSON.stringify(state, null, 2) + "\n");
   }
 
-  private state(app: string): { digest?: string; env?: string } | undefined {
+  private state(app: string): { digest?: string; env?: string; manifest?: string } | undefined {
     try {
       return JSON.parse(readFileSync(this.stateFile(app), "utf8"));
     } catch {

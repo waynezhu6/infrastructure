@@ -1,14 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/config.js";
 import { createRunner } from "../src/deploy.js";
 import type { Exec } from "../src/exec.js";
-import { Deployer, Store, type Job } from "../src/jobs.js";
+import { Deployer, Job, Store } from "../src/jobs.js";
+import { provision } from "../src/provision.js";
+import type { Manifest } from "../src/manifest.js";
 
 const digest = `sha256:${"a".repeat(64)}`;
+
+interface Pg {
+  roles: Set<string>;
+  databases: Set<string>;
+  sql: string[];
+}
 
 function setup(opts: {
   previous?: string;
@@ -19,6 +27,8 @@ function setup(opts: {
   healthy?: (call: number) => boolean;
   env?: Record<string, string>;
   fail?: (args: string[]) => boolean;
+  manifest?: Manifest;
+  pg?: Partial<Pg>;
 }) {
   const infraDir = mkdtempSync(join(tmpdir(), "infra-"));
   const dataDir = mkdtempSync(join(tmpdir(), "data-"));
@@ -29,11 +39,24 @@ function setup(opts: {
 
   const config = { owner: "WayneZhu6", registry: "ghcr.io", infraDir, dataDir, composeFile: "/app/app.compose.yml", healthTimeoutMs: 50 } as Config;
   const calls: { args: string[]; env?: NodeJS.ProcessEnv }[] = [];
+  // A fake Postgres behind `docker exec postgres psql -c <sql>`.
+  const pg: Pg = { roles: new Set(), databases: new Set(), sql: [], ...opts.pg };
   const exec: Exec = async (cmd, args, o) => {
     if (cmd !== "docker") return { code: 0, stdout: "" };
     calls.push({ args, env: o?.env });
     if (opts.fail?.(args)) return { code: 1, stdout: "" };
     const [a, b] = args;
+    if (a === "exec" && b === "postgres") {
+      const sql = args.at(-1)!;
+      pg.sql.push(sql);
+      // Queries name it as 'reader', statements as "reader".
+      const name = sql.match(/"([a-z0-9_]+)"/)?.[1] ?? sql.match(/'([a-z0-9_]+)'$/)?.[1] ?? "";
+      if (sql.includes("FROM pg_roles")) return { code: 0, stdout: pg.roles.has(name) ? "1\n" : "" };
+      if (sql.includes("FROM pg_database")) return { code: 0, stdout: pg.databases.has(name) ? "1\n" : "" };
+      if (sql.startsWith("CREATE ROLE")) pg.roles.add(name);
+      if (sql.startsWith("CREATE DATABASE")) pg.databases.add(name);
+      return { code: 0, stdout: "" };
+    }
     if (a === "ps") return { code: 0, stdout: (opts.labelled ?? []).map((n) => `${n}\n`).join("") };
     if (a === "image" && b === "inspect") return opts.previous ? { code: 0, stdout: opts.previous } : { code: 1, stdout: "" };
     if (a === "container" && b === "inspect") {
@@ -58,13 +81,13 @@ function setup(opts: {
   const deployer = new Deployer(createRunner({ config, store, exec, fetch: fetchFake, sleep: async () => {} }), store);
   const run = (): Promise<Job> =>
     new Promise((resolve) => {
-      const job = deployer.submit({ app: "reader", digest, repository: "waynezhu6/reader", sha: "abcdef0", runId: "1", env: opts.env ?? {} });
+      const job = deployer.submit({ app: "reader", digest, repository: "waynezhu6/reader", sha: "abcdef0", runId: "1", env: opts.env ?? {}, manifest: opts.manifest });
       job.once("done", () => resolve(job));
     });
   const docker = () => calls.map((c) => c.args.join(" "));
   // The order of the calls matching each pattern, so tests can check one came before another.
   const index = (pattern: RegExp) => docker().findIndex((c) => pattern.test(c));
-  return { infraDir, dataDir, calls, docker, index, health, run, store };
+  return { infraDir, dataDir, calls, docker, index, health, run, store, pg };
 }
 
 test("a healthy deploy starts a new container, routes to it, then retires the old one", async () => {
@@ -161,15 +184,63 @@ test("with nothing serving before, a failure just reports", async () => {
   assert.equal(docker().filter((c) => c.startsWith("compose")).length, 1);
 });
 
-test("an app without secrets fails before touching anything", async () => {
-  const { infraDir, calls, run } = setup({});
-  const { rmSync } = await import("node:fs");
+test("an app without infra.yml or secrets gets only NODE_ENV and PORT", async () => {
+  const { infraDir, dataDir, run, pg } = setup({});
+  rmSync(join(infraDir, "secrets", "reader.env"));
+  const job = await run();
+  assert.equal(job.status, "succeeded", job.lines.join("\n"));
+  assert.match(job.lines.join("\n"), /No infra.yml in the repo; provisioning nothing/);
+  assert.deepEqual(pg.sql, []);
+  assert.equal(readFileSync(join(dataDir, "apps", "reader", "app.env"), "utf8"), "NODE_ENV=production\nPORT=3001\n");
+  assert.ok(!existsSync(join(infraDir, "secrets", "reader.env")));
+});
+
+test("postgres: true creates the role and database and writes DATABASE_URL", async () => {
+  const { infraDir, dataDir, run, pg } = setup({ manifest: { postgres: true } });
+  writeFileSync(join(infraDir, "secrets", "reader.env"), "READER_KEY=k");
+  const job = await run();
+  assert.equal(job.status, "succeeded", job.lines.join("\n"));
+
+  assert.deepEqual([...pg.roles], ["reader"]);
+  assert.deepEqual([...pg.databases], ["reader"]);
+  assert.ok(pg.sql.includes('REVOKE CONNECT, TEMPORARY ON DATABASE "reader" FROM PUBLIC'));
+  const secrets = readFileSync(join(infraDir, "secrets", "reader.env"), "utf8");
+  const url = secrets.match(/^DATABASE_URL=postgres:\/\/reader:([0-9a-f]{48})@postgres:5432\/reader$/m);
+  assert.ok(url, secrets);
+  assert.ok(secrets.startsWith("READER_KEY=k\nDATABASE_URL="), "hand-added lines are kept");
+  assert.ok(pg.sql.includes(`CREATE ROLE "reader" LOGIN PASSWORD '${url[1]}'`));
+  assert.ok(!job.lines.join("\n").includes(url[1]), "the password stays out of the log");
+  assert.match(readFileSync(join(dataDir, "apps", "reader", "app.env"), "utf8"), /DATABASE_URL=postgres:\/\/reader:/);
+});
+
+test("postgres: true on an app that already has it changes nothing", async () => {
+  const { infraDir, run, pg } = setup({ manifest: { postgres: true }, pg: { roles: new Set(["reader"]), databases: new Set(["reader"]) } });
+  writeFileSync(join(infraDir, "secrets", "reader.env"), "DATABASE_URL=postgres://reader:pw@postgres:5432/reader\n");
+  const job = await run();
+  assert.equal(job.status, "succeeded", job.lines.join("\n"));
+  assert.ok(!pg.sql.some((q) => q.startsWith("CREATE")));
+  assert.equal(readFileSync(join(infraDir, "secrets", "reader.env"), "utf8"), "DATABASE_URL=postgres://reader:pw@postgres:5432/reader\n");
+});
+
+test("a role whose password was lost fails the deploy before anything starts", async () => {
+  const { infraDir, calls, run } = setup({ manifest: { postgres: true }, pg: { roles: new Set(["reader"]) } });
   rmSync(join(infraDir, "secrets", "reader.env"));
   const job = await run();
   assert.equal(job.status, "failed");
-  assert.match(job.lines.join("\n"), /no secrets\/reader.env/);
-  assert.equal(calls.length, 0);
-  assert.ok(existsSync(join(infraDir, "sites", "reader")));
+  assert.match(job.lines.join("\n"), /role reader exists but secrets\/reader.env has no DATABASE_URL/);
+  assert.ok(!calls.some((c) => c.args[0] === "pull" || c.args[0] === "compose"));
+});
+
+test("dashes in app names become underscores in Postgres", async () => {
+  const infraDir = mkdtempSync(join(tmpdir(), "infra-"));
+  const sql: string[] = [];
+  const exec: Exec = async (_cmd, args) => {
+    sql.push(args.at(-1)!);
+    return { code: 0, stdout: "" };
+  };
+  await provision(exec, infraDir, new Job({ app: "notes-api", digest, repository: "r", sha: "s", runId: "1", env: {} }), "notes-api", { postgres: true });
+  assert.ok(sql.includes('CREATE DATABASE "notes_api" OWNER "notes_api"'), sql.join("\n"));
+  assert.match(readFileSync(join(infraDir, "secrets", "notes-api.env"), "utf8"), /^DATABASE_URL=postgres:\/\/notes_api:[0-9a-f]+@postgres:5432\/notes_api\n$/);
 });
 
 test("GitHub secrets join the server's env file and win over hand-added lines", async () => {

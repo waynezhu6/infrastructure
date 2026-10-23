@@ -1,7 +1,8 @@
 name: Register app
 
 # Actions tab > Register app > Run workflow. Opens a PR adding apps/<name>.caddy.
-# Merging it serves the app under waynezhu.dev and creates its database on deploy.
+# Merging it lets the app deploy and serves it under waynezhu.dev. Its database
+# and the like come from the app's own infra.yml, on its deploys.
 # Needs Settings > Actions > General > "Allow GitHub Actions to create and
 # approve pull requests".
 
@@ -39,4 +40,4 @@ jobs:
           body: |
             Adds `apps/${{ inputs.name }}.caddy`, serving `waynezhu.dev/apps/${{ inputs.name }}/` from `sites/${{ inputs.name }}` and `waynezhu.dev/api/${{ inputs.name }}/` from `${{ inputs.name }}-backend:3001`.
 
-            On merge, the Deploy workflow reloads Caddy and creates the `${{ inputs.name }}` database and role.
+            On merge, the Deploy workflow reloads Caddy and the deployer starts accepting `${{ inputs.name }}`'s deploys. Its database is created on its first deploy if its `infra.yml` has `postgres: true`.

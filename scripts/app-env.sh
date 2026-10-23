@@ -20,7 +20,7 @@ if [ ! -f "apps/$NAME.caddy" ]; then
   exit 1
 fi
 if [ ! -f "secrets/$NAME.env" ]; then
-  echo "App '$NAME' is registered but has no database yet. Re-run the infrastructure Deploy workflow." >&2
+  echo "App '$NAME' has no secrets/$NAME.env yet. Its database is created by its first deploy through the deployer, with 'postgres: true' in its infra.yml." >&2
   exit 1
 fi
 

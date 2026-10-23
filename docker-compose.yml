@@ -70,7 +70,8 @@ services:
         bind:
           create_host_path: false
       - ./apps:/infra/apps:ro
-      - ./secrets:/infra/secrets:ro
+      # Writable: provisioning adds DATABASE_URL lines (deployer/src/provision.ts).
+      - ./secrets:/infra/secrets
       - ./sites:/infra/sites
       # Deploy logs (deploys/logs/<app>/<id>.log) and which image each app runs.
       - ./deploys:/data

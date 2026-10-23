@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Config } from "./config.js";
 import type { Exec } from "./exec.js";
 import type { Job, Runner, Store } from "./jobs.js";
+import { provision } from "./provision.js";
 
 export interface DeployDeps {
   config: Config;
@@ -23,6 +24,7 @@ export const APP_LABEL = "deployer.app";
 export const STOP_TIMEOUT_S = 30;
 
 // One deploy, blue-green on the one server:
+//   0. provision what the app's infra.yml asks for (provision.ts)
 //   1. pull the image by digest
 //   2. copy its frontend out into a staging folder
 //   3. start a new backend container, <app>-backend-<deploy id>, next to the
@@ -61,10 +63,8 @@ export function createRunner(deps: DeployDeps): Runner {
 
     job.log(`==> Deploying ${app} (${job.req.repository}@${job.req.sha.slice(0, 7)}) as deploy ${job.id}`);
 
+    await provision(exec, config.infraDir, job, app, job.req.manifest);
     const secrets = join(config.infraDir, "secrets", `${app}.env`);
-    if (!existsSync(secrets)) {
-      throw new Error(`${app} is registered but has no secrets/${app}.env yet. Re-run the infrastructure Deploy workflow.`);
-    }
 
     job.log(`==> Pulling ${image}`);
     await run(["pull", "--quiet", image]);
@@ -109,7 +109,7 @@ export function createRunner(deps: DeployDeps): Runner {
 
       mkdirSync(appDir, { recursive: true });
       const envFile = join(appDir, "app.env");
-      writeFileSync(envFile, appEnv(readFileSync(secrets, "utf8"), job.req.env), { mode: 0o600 });
+      writeFileSync(envFile, appEnv(existsSync(secrets) ? readFileSync(secrets, "utf8") : "", job.req.env), { mode: 0o600 });
 
       job.log(`==> Starting ${container} next to ${old.length ? "the one serving" : "nothing"}`);
       // A compose project per container, so starting this one never touches
@@ -176,7 +176,7 @@ export function createRunner(deps: DeployDeps): Runner {
 }
 
 // The backend's environment: NODE_ENV and PORT, the server's secrets/<app>.env
-// (DATABASE_URL and anything added by hand), then the app repo's GitHub
+// (DATABASE_URL and anything added by hand; empty if the app has neither), then the app repo's GitHub
 // secrets, which win over a hand-added line of the same name. The server
 // rejects GitHub secrets named like the server-owned ones (server.ts).
 export function appEnv(serverFile: string, env: Record<string, string>): string {

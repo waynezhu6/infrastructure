@@ -89,6 +89,15 @@ test("the same image with changed secrets deploys again", () => {
   assert.equal(started.length, 1);
 });
 
+test("the same image with a changed infra.yml deploys again", () => {
+  const { deployer, store, started } = setup();
+  store.setCurrent(req("reader", 1), "old");
+  assert.equal(deployer.submit(req("reader", 1)).status, "succeeded");
+  const job = deployer.submit({ ...req("reader", 1), manifest: { postgres: true } });
+  assert.equal(job.status, "running");
+  assert.equal(started.length, 1);
+});
+
 test("a failed deploy is reported and the next one still runs", async () => {
   const { deployer, finish } = setup();
   const a = deployer.submit(req("reader", 1));
