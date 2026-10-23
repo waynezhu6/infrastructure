@@ -51,9 +51,24 @@ jobs:
         env:
           TARGET: ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          # Backups (README, "Backups"); optional, empty when unset.
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          BACKUP_S3_ENDPOINT: ${{ secrets.BACKUP_S3_ENDPOINT }}
+          BACKUP_S3_REGION: ${{ secrets.BACKUP_S3_REGION }}
+          BACKUP_S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+          BACKUP_S3_ACCESS_KEY_ID: ${{ secrets.BACKUP_S3_ACCESS_KEY_ID }}
+          BACKUP_S3_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_S3_SECRET_ACCESS_KEY }}
+          BACKUP_PING_URL: ${{ secrets.BACKUP_PING_URL }}
         run: |
           umask 077
-          printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD" > deploy.env
+          {
+            printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+            for name in BACKUP_PASSPHRASE BACKUP_S3_ENDPOINT BACKUP_S3_REGION BACKUP_S3_BUCKET \
+                        BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY BACKUP_PING_URL; do
+              # Single quotes keep compose from interpolating the value.
+              printf "%s='%s'\n" "$name" "${!name}"
+            done
+          } > deploy.env
           scp deploy.env "$TARGET:~/infrastructure/.env"
 
       # App databases are created by the deployer on each app's deploy, from
@@ -65,5 +80,6 @@ jobs:
           ssh "$TARGET" 'set -e
             cd ~/infrastructure
             chmod 600 .env
+            install -d -m 700 backups
             docker compose up -d --build
             docker exec caddy caddy reload --config /etc/caddy/Caddyfile'

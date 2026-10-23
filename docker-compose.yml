@@ -85,6 +85,37 @@ services:
       timeout: 5s
       retries: 3
 
+  # Nightly backups (backup/): every database plus secrets/, encrypted, kept
+  # in ./backups and copied to an offsite bucket (README, "Backups"). The
+  # BACKUP_* settings come from this repo's Actions secrets, via .env; with
+  # none set it still keeps unencrypted copies on the server.
+  backup:
+    build: ./backup
+    container_name: backup
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_HOUR_UTC: "3"
+      BACKUP_KEEP_LOCAL: "7"
+      BACKUP_PASSPHRASE: ${BACKUP_PASSPHRASE:-}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      BACKUP_PING_URL: ${BACKUP_PING_URL:-}
+      # The offsite bucket, as an rclone remote named "offsite". Any
+      # S3-compatible store works; Backblaze B2 is the one set up.
+      RCLONE_CONFIG_OFFSITE_TYPE: s3
+      RCLONE_CONFIG_OFFSITE_PROVIDER: Other
+      RCLONE_CONFIG_OFFSITE_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      RCLONE_CONFIG_OFFSITE_REGION: ${BACKUP_S3_REGION:-}
+      RCLONE_CONFIG_OFFSITE_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID:-}
+      RCLONE_CONFIG_OFFSITE_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY:-}
+    volumes:
+      - ./backups:/backups
+      - ./secrets:/infra/secrets:ro
+    networks:
+      - postgres-db
+
 # Named volumes for data persistence
 volumes:
   caddy_data:
