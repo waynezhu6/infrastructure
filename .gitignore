@@ -17,3 +17,6 @@ Thumbs.db
 
 # Deploy logs and state, written by the deployer on the server
 deploys/
+
+# Backups, written by the backup container on the server
+backups/

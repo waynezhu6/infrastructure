@@ -14,6 +14,8 @@ This repo is the infrastructure boilerplate for my personal server (currently us
 │   ├── scripts/              ← register-app.sh, app-env.sh
 │   ├── deployer/             ← the service app CI deploys through (waynezhu.dev/deploy)
 │   ├── actions/deploy/       ← the GitHub Action app repos call it with
+│   ├── backup/               ← the nightly backup container
+│   ├── backups/              ← NOT in git; the newest 7 backups
 │   ├── deploys/              ← NOT in git; deploy logs and each app's current image
 │   ├── secrets/              ← NOT in git; generated per-app DATABASE_URLs
 │   └── sites/
@@ -165,6 +167,53 @@ Restarting the deployer (any deploy of this repo that changes `deployer/`) waits
 
 Apps created before the deployer still deploy over SSH with `SERVER_HOST`, `SERVER_USER` and `SSH_DEPLOY_KEY` until their workflow and Dockerfile are updated from app-template; the first deploy through the deployer adopts the running container and replaces it.
 
+## Backups
+
+Every night at 03:00 UTC the `backup` container (`backup/`) dumps every database with `pg_dumpall` (roles and their passwords included) and packs it with `secrets/` into one archive. It encrypts the archive with `BACKUP_PASSPHRASE`, checks that it opens and that the dump is complete, and keeps the newest 7 in `~/infrastructure/backups`. It then copies each one to a Backblaze B2 bucket. The server's B2 key can only write, so even someone who took over the server couldn't delete the offsite copies. A lifecycle rule on the bucket expires them after 14 days.
+
+Without `BACKUP_PASSPHRASE`, backups stay on the server unencrypted and nothing goes offsite. Without the `BACKUP_S3_*` secrets they stay on the server only.
+
+```bash
+make backup                                        # back up now
+make restore-test                                  # restore the newest into a throwaway Postgres, count rows
+make restore-test FILE=backup-20261024T030000Z.tar.gpg
+docker logs backup                                 # what the nightly runs said
+```
+
+`make restore-test` never touches the live database. Run it after setting things up, and now and then after that: a backup is only proven by restoring it.
+
+**Setting up B2** (once):
+
+1. Create a [Backblaze B2](https://www.backblaze.com/cloud-storage) account. The first 10 GB are free.
+2. **Buckets → Create a Bucket**: a unique name such as `waynezhu-backups`, **Private**, encryption on, Object Lock off. Note its **Endpoint**, e.g. `s3.us-west-004.backblazeb2.com`. The region is the part after `s3.`, e.g. `us-west-004`.
+3. Open the bucket's **Lifecycle Settings** and choose **Use custom lifecycle rules**: file prefix `backup-`, hide after 14 days, delete 1 day after hiding.
+4. **Application Keys → Add a New Application Key**: allow access to that bucket only, **Type of Access: Write Only**. Copy the `keyID` and `applicationKey`; the key is shown only once.
+5. Make a passphrase, e.g. `openssl rand -base64 32`. **Save it in your password manager.** GitHub secrets can't be read back, and the backups can't be opened without it.
+6. Add this repo's Actions secrets (Settings → Secrets and variables → Actions), then run Deploy:
+
+| Secret | Value |
+|---|---|
+| `BACKUP_PASSPHRASE` | The passphrase from step 5 (no `'`) |
+| `BACKUP_S3_ENDPOINT` | `https://` + the bucket's endpoint |
+| `BACKUP_S3_REGION` | e.g. `us-west-004` |
+| `BACKUP_S3_BUCKET` | The bucket's name |
+| `BACKUP_S3_ACCESS_KEY_ID` | The key's `keyID` |
+| `BACKUP_S3_SECRET_ACCESS_KEY` | The key's `applicationKey` |
+| `BACKUP_PING_URL` | Optional: a [healthchecks.io](https://healthchecks.io) ping URL. It's pinged after each backup (`/fail` on failure), and healthchecks.io emails you if a night is missed. |
+
+7. On the server, run `make backup`, then `make restore-test`. The file should also appear in the bucket in the B2 web UI.
+
+**Restoring for real** (a new server, say): bootstrap and deploy this repo as in "Setting Up a New Server". Download a backup from the B2 web UI, copy it to `~/infrastructure/backups/` and open it:
+
+```bash
+cd ~/infrastructure/backups
+gpg -d backup-<stamp>.tar.gpg | tar -x        # asks for the passphrase
+gunzip -c postgres.sql.gz | docker exec -i postgres psql -U postgres
+tar -xzf secrets.tar.gz -C ~/infrastructure   # each app's DATABASE_URL and hand-added lines
+```
+
+Then re-run each app's Deploy workflow. The restored roles keep their passwords, so the restored `secrets/` files match them.
+
 ## Common Commands
 
 ```bash
@@ -187,6 +236,7 @@ docker run --rm -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile -v $(pwd)/apps:/etc/cad
 # PostgreSQL
 docker exec -it postgres psql -U postgres
 
-# Backup
-docker exec postgres pg_dumpall -U postgres > backup-$(date +%Y%m%d).sql
+# Backup now / prove the newest backup restores (see "Backups")
+make backup
+make restore-test
 ```
