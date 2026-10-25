@@ -23,6 +23,11 @@ if ! [[ "$NAME" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]]; then
   echo "Invalid name '$NAME': use lowercase letters, digits and dashes." >&2
   exit 1
 fi
+# The monitor's own healthchecks.io checks share the namespace with apps.
+case "$NAME" in monitor | traffic | backup)
+  echo "'$NAME' is taken by a monitoring check (README, \"Monitoring\"); pick another name." >&2
+  exit 1
+esac
 
 OUT="apps/$NAME.caddy"
 if [ -e "$OUT" ]; then

@@ -93,7 +93,7 @@ test("the same image with a changed infra.yml deploys again", () => {
   const { deployer, store, started } = setup();
   store.setCurrent(req("reader", 1), "old");
   assert.equal(deployer.submit(req("reader", 1)).status, "succeeded");
-  const job = deployer.submit({ ...req("reader", 1), manifest: { postgres: true } });
+  const job = deployer.submit({ ...req("reader", 1), manifest: { postgres: true, monitor: true } });
   assert.equal(job.status, "running");
   assert.equal(started.length, 1);
 });
