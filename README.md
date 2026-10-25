@@ -15,7 +15,9 @@ This repo is the infrastructure boilerplate for my personal server (currently us
 │   ├── deployer/             ← the service app CI deploys through (waynezhu.dev/deploy)
 │   ├── actions/deploy/       ← the GitHub Action app repos call it with
 │   ├── backup/               ← the nightly backup container
+│   ├── monitor/              ← health checks and traffic, reported to healthchecks.io
 │   ├── backups/              ← NOT in git; the newest 7 backups
+│   ├── logs/caddy/           ← NOT in git; Caddy's access logs, trimmed
 │   ├── deploys/              ← NOT in git; deploy logs and each app's current image
 │   ├── secrets/              ← NOT in git; generated per-app DATABASE_URLs
 │   └── sites/
@@ -107,6 +109,7 @@ postgres: true   # its own database and role, and DATABASE_URL
 | Setting | Default | What the deployer does |
 |---|---|---|
 | `postgres` | `false` | Creates a role and database named after the app (dashes become underscores: `my-app` → `my_app`), with a generated password, reachable only by that role, and adds its `DATABASE_URL` to `~/infrastructure/secrets/<name>.env`. |
+| `monitor` | `true` | Nothing to create: the monitor checks the app's `/api/health` every minute and reports it to healthchecks.io (see "Monitoring"). `false` leaves the app out. |
 
 Without the file, or with `postgres: false`, nothing is created, but anything that already exists (a database from before, `DATABASE_URL` in the secrets file) is kept and still passed to the backend. Unknown settings or non-boolean values fail the deploy with a message, so a typo can't quietly skip a database. Changing only `infra.yml` redeploys even if the image is the same. app-template ships with `postgres: true`.
 
@@ -199,7 +202,7 @@ docker logs backup                                 # what the nightly runs said
 | `BACKUP_S3_BUCKET` | The bucket's name |
 | `BACKUP_S3_ACCESS_KEY_ID` | The key's `keyID` |
 | `BACKUP_S3_SECRET_ACCESS_KEY` | The key's `applicationKey` |
-| `BACKUP_PING_URL` | Optional: a [healthchecks.io](https://healthchecks.io) ping URL. It's pinged after each backup (`/fail` on failure), and healthchecks.io emails you if a night is missed. |
+| `BACKUP_PING_URL` | Optional: a [healthchecks.io](https://healthchecks.io) ping URL. It's pinged when each backup starts and ends (`/fail` on failure), and healthchecks.io alerts you if a night is missed. Not needed once `HC_PING_KEY` is set (see "Monitoring"), which reports backups as the `backup` check. |
 
 7. On the server, run `make backup`, then `make restore-test`. The file should also appear in the bucket in the B2 web UI.
 
@@ -213,6 +216,37 @@ tar -xzf secrets.tar.gz -C ~/infrastructure   # each app's DATABASE_URL and hand
 ```
 
 Then re-run each app's Deploy workflow. The restored roles keep their passwords, so the restored `secrets/` files match them.
+
+## Monitoring
+
+Anything on this server goes down with it, so alerts come from [healthchecks.io](https://healthchecks.io), which runs elsewhere and alerts when the pings it expects stop or report a failure. The free plan has 20 checks.
+
+The `monitor` container (`monitor/`) runs a round every minute and pings one check per thing it watches, under one project ping key (`HC_PING_KEY`). Each check is created on its first ping (`?create=1`), so a new app needs no setup:
+
+| Check | Pinged | Fails when |
+|---|---|---|
+| `<app>` | Every round, for each app the deployer has deployed, unless its `infra.yml` says `monitor: false` | `http://<app>-backend:3001/api/health` doesn't answer twice in a row, 5 s apart |
+| `traffic` | Every round | Any app had more than `TRAFFIC_LIMIT_PER_MINUTE` (300) API requests in the last minute; the failure lists which |
+| `monitor` | At the end of every round | Never by itself: it goes late if the monitor, Docker or the whole server stops |
+| `backup` | When each nightly backup starts and ends (`backup/`) | The backup fails |
+
+Failures are reported straight away with `/fail`, so they don't depend on grace periods. Lateness only matters for `monitor` and `backup`: if the server dies, `monitor` goes late first and tells you the cause. Without `HC_PING_KEY` the monitor still runs and only logs failures (`docker logs monitor`).
+
+**Access logs.** Caddy logs every request to `~/infrastructure/logs/caddy/access.log` (rolled at 20 MB, 5 kept), trimmed to what counting needs: the time, method, status, duration, client IP and the URI cut to its first two segments (`/api/<app>`, `/apps/<app>`). Paths beyond that (auth's invite links), query strings (txtify's `?key=`) and headers are never written.
+
+```bash
+make traffic              # requests per app, last 60 minutes
+make traffic MINUTES=5
+docker logs monitor       # what the monitor saw fail
+```
+
+**Setting up healthchecks.io** (once):
+
+1. Create a [healthchecks.io](https://healthchecks.io) account. The default project is fine.
+2. Project **Settings → Ping key → Create**, and add it as this repo's `HC_PING_KEY` Actions secret. Run Deploy; within a minute the checks appear.
+3. **Integrations**: add where alerts go, e.g. email plus a phone push app (ntfy, Pushover, Telegram).
+4. Open the `monitor` check and set its period to 1 minute and grace to 2 minutes, and give it your loudest integration. Checks made by `?create=1` start with a 1 day period and 1 hour grace, which suits `backup` and the app checks, since their failures arrive as `/fail`.
+5. Optionally give the app and `traffic` checks a quieter integration, so a dead server is one loud alert rather than many.
 
 ## Common Commands
 

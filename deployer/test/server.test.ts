@@ -123,7 +123,7 @@ test("parses infra.yml and refuses a bad one before deploying", async () => {
   }
   const res = await post("notes", { digest: digest("f"), manifest: "# what notes needs\npostgres: true\n" });
   assert.equal(res.status, 200);
-  assert.deepEqual(deployer.get(res.headers.get("x-deploy-id")!)!.req.manifest, { postgres: true });
+  assert.deepEqual(deployer.get(res.headers.get("x-deploy-id")!)!.req.manifest, { postgres: true, monitor: true });
   await res.body!.cancel();
   release(true);
 });

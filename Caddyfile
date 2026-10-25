@@ -25,6 +25,27 @@ waynezhu.dev {
 		-Server
 	}
 
+	# Access logs, for `make traffic` and the monitor's traffic check
+	# (monitor/). Only what counting needs: each URI is cut to its first two
+	# segments (/api/<app>, /apps/<app>), so tokens in paths (auth's invite and
+	# recovery links), query strings (txtify's ?key= and ?url=) and headers
+	# never reach the disk.
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 20MiB
+			roll_keep 5
+		}
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp "^(/[^/?#]*(?:/[^/?#]*)?).*$" "${1}"
+				request>headers delete
+				request>tls delete
+				resp_headers delete
+			}
+		}
+	}
+
 	# App CI deploys through the deployer (deployer/).
 	@deploy path /deploy /deploy/*
 	handle @deploy {
