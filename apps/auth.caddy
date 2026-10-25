@@ -1,0 +1,55 @@
+# Registered by scripts/register-app.sh. App: auth
+# Imported inside the waynezhu.dev site block in the Caddyfile.
+#   waynezhu.dev/apps/auth/...  -> the frontend in /srv/auth
+#   waynezhu.dev/api/auth/...   -> auth-backend:3001 as /api/...
+
+redir /apps/auth /apps/auth/ 308
+
+handle_path /api/auth/* {
+	rewrite * /api{path}
+	reverse_proxy auth-backend:3001 {
+		header_up X-Real-IP {remote_host}
+		# A deploy starts the new backend next to the old one, then stops the old
+		# one (deployer/src/deploy.ts). A fresh connection per request means none
+		# is ever reused just as the old backend closes it, and one that can't
+		# connect is retried for up to 5s, by when the alias points elsewhere.
+		transport http {
+			keepalive off
+		}
+		lb_try_duration 5s
+		lb_try_interval 250ms
+	}
+}
+
+handle_path /apps/auth/* {
+	root * /srv/auth
+
+	# Until the app's first deploy publishes a frontend, say so rather than
+	# serve a blank 404, so a new registration can be checked on its own.
+	@undeployed not file {
+		root /srv/auth
+		try_files /index.html
+	}
+	handle @undeployed {
+		header Content-Type "text/html; charset=utf-8"
+		respond <<HTML
+			<!doctype html>
+			<html lang="en">
+			<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>auth</title>
+			<style>body{margin:0;min-height:100vh;display:grid;place-items:center;text-align:center;font:17px/1.5 system-ui,sans-serif;color:#555;background:#fbf9f4}@media(prefers-color-scheme:dark){body{color:#aaa;background:#1c1b19}}b{color:inherit;font-size:1.3em}</style></head>
+			<body><p><b>auth</b><br>Registered, but nothing has been deployed here yet.</p></body>
+			</html>
+			HTML 503
+	}
+	encode gzip zstd
+	# Unknown paths fall back to index.html so client-side routes work.
+	try_files {path} /index.html
+	file_server
+
+	# Built assets have hashed names, so they can be cached forever; anything
+	# else (index.html and files in public/) must be re-checked.
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+	@other not path /assets/*
+	header @other Cache-Control "no-cache"
+}
