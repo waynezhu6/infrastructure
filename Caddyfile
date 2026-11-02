@@ -12,7 +12,8 @@
 }
 
 # Everything is served from one domain:
-#   waynezhu.dev/             this placeholder page
+#   waynezhu.dev/             the root site, if one is registered
+#                             (register-app.sh --root), else this placeholder
 #   waynezhu.dev/apps/<name>/ each app's frontend
 #   waynezhu.dev/api/<name>/  each app's backend
 #   waynezhu.dev/deploy       the deployer app CI calls
@@ -36,6 +37,8 @@ waynezhu.dev {
 
 	import apps/*.caddy
 
+	# Only reached with no root site: its apps/<name>.caddy has a catch-all
+	# handle like this one, and the first of the two wins.
 	handle {
 		header Content-Type "text/html; charset=utf-8"
 		respond <<HTML
