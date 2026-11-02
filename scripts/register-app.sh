@@ -5,18 +5,25 @@
 # waynezhu.dev/api/<name>/ (backend). What the app needs besides (its database)
 # comes from its own infra.yml, provisioned by the deployer on each app deploy.
 #
-# Usage: scripts/register-app.sh <name>
-#   <name>  the app repo's name, lowercased (e.g. notes). The app's backend
-#           backend must be reachable as <name>-backend; the deployer does this.
+# Usage: scripts/register-app.sh [--static] <name>
+#   <name>    the app repo's name, lowercased (e.g. notes). The app's backend
+#             must be reachable as <name>-backend; the deployer does this.
+#   --static  for an app with no backend (backend: false in its infra.yml):
+#             only waynezhu.dev/apps/<name>/, serving its files as they are.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+TEMPLATE=apps/_app.caddy.tmpl
+if [ "${1:-}" = "--static" ]; then
+  TEMPLATE=apps/_static.caddy.tmpl
+  shift
+fi
 NAME="${1:-}"
 
 if [ -z "$NAME" ]; then
-  echo "Usage: $0 <name>" >&2
+  echo "Usage: $0 [--static] <name>" >&2
   exit 1
 fi
 if ! [[ "$NAME" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]]; then
@@ -30,5 +37,5 @@ if [ -e "$OUT" ]; then
   exit 1
 fi
 
-sed -e "s/__NAME__/$NAME/g" apps/_app.caddy.tmpl > "$OUT"
+sed -e "s/__NAME__/$NAME/g" "$TEMPLATE" > "$OUT"
 echo "Wrote $OUT"
