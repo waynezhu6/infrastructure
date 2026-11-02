@@ -30,14 +30,3 @@ handle_path /apps/resume/* {
 	header Cache-Control "no-cache"
 	file_server
 }
-
-# The short link: waynezhu.dev/resume opens the PDF itself. The resume repo's
-# Dockerfile puts it in the image as resume.pdf.
-redir /resume/ /resume 308
-handle /resume {
-	root * /srv/resume
-	rewrite * /resume.pdf
-	header Content-Disposition `inline; filename="Wayne_Zhu_Resume.pdf"`
-	header Cache-Control "no-cache"
-	file_server
-}
