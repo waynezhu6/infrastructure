@@ -6,13 +6,16 @@ import { parse } from "yaml";
 // removed: setting a resource back to false only stops creating it.
 //
 //   postgres: true    a database and role of its own, and DATABASE_URL
+//   backend: false    a static site: the image only holds files to publish
+//                     (/app/frontend/dist), and no container is started
 export interface Manifest {
   postgres: boolean;
+  backend: boolean;
 }
 
 export const MANIFEST_FILE = "infra.yml";
 
-const DEFAULTS: Manifest = { postgres: false };
+const DEFAULTS: Manifest = { postgres: false, backend: true };
 
 export class ManifestError extends Error {}
 
@@ -41,8 +44,8 @@ export function parseManifest(text: string): Manifest {
 
 // How a manifest reads in a deploy's log.
 export function describe(manifest: Manifest): string {
-  const wanted = Object.entries(manifest)
-    .filter(([, v]) => v)
-    .map(([k]) => k);
+  const wanted: string[] = [];
+  if (manifest.postgres) wanted.push("postgres");
+  if (!manifest.backend) wanted.push("no backend (static files only)");
   return wanted.length ? wanted.join(", ") : "nothing";
 }

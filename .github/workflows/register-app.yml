@@ -12,6 +12,11 @@ on:
       name:
         description: App repo name, lowercase (e.g. notes)
         required: true
+      kind:
+        description: "app: frontend + backend. static: files only at /apps/<name>/. root: files only, serving every path no app claims (one at most)."
+        type: choice
+        options: [app, static, root]
+        default: app
 
 permissions:
   contents: write
@@ -26,7 +31,9 @@ jobs:
       - name: Generate app config
         env:
           NAME: ${{ inputs.name }}
-        run: scripts/register-app.sh "$NAME"
+          KIND: ${{ inputs.kind }}
+        run: |
+          if [ "$KIND" = app ]; then scripts/register-app.sh "$NAME"; else scripts/register-app.sh "--$KIND" "$NAME"; fi
 
       - name: Validate Caddy config
         run: docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$PWD/apps:/etc/caddy/apps:ro" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile

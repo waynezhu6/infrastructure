@@ -36,6 +36,9 @@ export const STOP_TIMEOUT_S = 30;
 //      on failure, remove only the new container, so the old one never stops
 //      serving, and leave the frontend alone.
 // The previous image stays tagged locally as local/<app>-backend:previous.
+//
+// A static site (backend: false in its infra.yml) skips 3 and 4: its image
+// only holds the files to publish. Any backend it had before is retired.
 export function createRunner(deps: DeployDeps): Runner {
   const { config, store, exec } = deps;
 
@@ -50,6 +53,7 @@ export function createRunner(deps: DeployDeps): Runner {
     const sites = join(config.infraDir, "sites");
     const staged = join(sites, `.${app}.${job.id}`);
     const appDir = join(config.dataDir, "apps", app);
+    const backend = job.req.manifest?.backend ?? true;
 
     const run = async (args: string[], env?: NodeJS.ProcessEnv) => {
       const result = await exec("docker", args, { env, onLine: (l) => job.log(`  ${l}`) });
@@ -94,7 +98,9 @@ export function createRunner(deps: DeployDeps): Runner {
     try {
       job.log("==> Unpacking frontend");
       const tmp = `deploy-${job.id}`;
-      if ((await quiet(["create", "--name", tmp, image])) === undefined) throw new Error("docker create failed");
+      // The command never runs. It lets an image built FROM scratch, which has
+      // none of its own, be created to copy from.
+      if ((await quiet(["create", "--name", tmp, image, "/none"])) === undefined) throw new Error("docker create failed");
       try {
         rmSync(staged, { recursive: true, force: true });
         await run(["cp", `${tmp}:${FRONTEND_IN_IMAGE}`, staged]).catch(() => {
@@ -107,37 +113,41 @@ export function createRunner(deps: DeployDeps): Runner {
       const { uid, gid } = statSync(sites);
       await exec("chown", ["-R", `${uid}:${gid}`, staged]);
 
-      mkdirSync(appDir, { recursive: true });
-      const envFile = join(appDir, "app.env");
-      writeFileSync(envFile, appEnv(existsSync(secrets) ? readFileSync(secrets, "utf8") : "", job.req.env), { mode: 0o600 });
+      if (!backend) {
+        job.log("==> No backend (infra.yml has backend: false); publishing the files only");
+      } else {
+        mkdirSync(appDir, { recursive: true });
+        const envFile = join(appDir, "app.env");
+        writeFileSync(envFile, appEnv(existsSync(secrets) ? readFileSync(secrets, "utf8") : "", job.req.env), { mode: 0o600 });
 
-      job.log(`==> Starting ${container} next to ${old.length ? "the one serving" : "nothing"}`);
-      // A compose project per container, so starting this one never touches
-      // the one serving.
-      await run(["compose", "--project-name", `${app}-${job.id}`, "--file", config.composeFile, "up", "--detach", "--pull", "never"], {
-        ...process.env,
-        APP: app,
-        CONTAINER: container,
-        IMAGE: image,
-        APP_ENV_FILE: envFile,
-      });
+        job.log(`==> Starting ${container} next to ${old.length ? "the one serving" : "nothing"}`);
+        // A compose project per container, so starting this one never touches
+        // the one serving.
+        await run(["compose", "--project-name", `${app}-${job.id}`, "--file", config.composeFile, "up", "--detach", "--pull", "never"], {
+          ...process.env,
+          APP: app,
+          CONTAINER: container,
+          IMAGE: image,
+          APP_ENV_FILE: envFile,
+        });
 
-      job.log(`==> Waiting for http://${container}:3001/api/health`);
-      if (!(await waitHealthy(deps, job, container))) {
-        job.log("==> Backend never became healthy. Its last log lines:");
-        await exec("docker", ["logs", "--tail", "40", container], { onLine: (l) => job.log(`  | ${l}`) });
-        throw new Error(
-          `health check failed; ${old.length ? "the old backend kept serving throughout" : "nothing was serving before either"} and the frontend was not changed`,
-        );
+        job.log(`==> Waiting for http://${container}:3001/api/health`);
+        if (!(await waitHealthy(deps, job, container))) {
+          job.log("==> Backend never became healthy. Its last log lines:");
+          await exec("docker", ["logs", "--tail", "40", container], { onLine: (l) => job.log(`  | ${l}`) });
+          throw new Error(
+            `health check failed; ${old.length ? "the old backend kept serving throughout" : "nothing was serving before either"} and the frontend was not changed`,
+          );
+        }
+
+        // Docker can't add an alias to a network the container is already on,
+        // so join caddy-web again with it. Nothing reaches this container by
+        // that network yet, so nothing notices.
+        job.log(`==> Routing ${alias} to ${container}`);
+        await run(["network", "disconnect", "caddy-web", container]);
+        await run(["network", "connect", "--alias", alias, "caddy-web", container]);
+        live = true;
       }
-
-      // Docker can't add an alias to a network the container is already on,
-      // so join caddy-web again with it. Nothing reaches this container by
-      // that network yet, so nothing notices.
-      job.log(`==> Routing ${alias} to ${container}`);
-      await run(["network", "disconnect", "caddy-web", container]);
-      await run(["network", "connect", "--alias", alias, "caddy-web", container]);
-      live = true;
     } catch (err) {
       if (!live) await quiet(["rm", "--force", container]);
       rmSync(staged, { recursive: true, force: true });
