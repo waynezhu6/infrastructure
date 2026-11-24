@@ -13,7 +13,8 @@ export interface DeployDeps {
   sleep: (ms: number) => Promise<void>;
 }
 
-// Where the app image keeps its built frontend (app-template's Dockerfile).
+// Where the app image keeps its built frontend (create-new-app's backend/Dockerfile;
+// a placeholder page when the app has no web frontend).
 export const FRONTEND_IN_IMAGE = "/app/frontend/dist";
 
 // The label app.compose.yml puts on every backend container, so a deploy can
@@ -98,7 +99,7 @@ export function createRunner(deps: DeployDeps): Runner {
       try {
         rmSync(staged, { recursive: true, force: true });
         await run(["cp", `${tmp}:${FRONTEND_IN_IMAGE}`, staged]).catch(() => {
-          throw new Error(`the image has no ${FRONTEND_IN_IMAGE}; build it with app-template's backend/Dockerfile`);
+          throw new Error(`the image has no ${FRONTEND_IN_IMAGE}; build it with create-new-app's backend/Dockerfile`);
         });
       } finally {
         await quiet(["rm", tmp]);
@@ -160,7 +161,7 @@ export function createRunner(deps: DeployDeps): Runner {
     }
 
     // Both containers serve until here. The old one gets SIGTERM, finishes
-    // the requests it has (app-template's backend closes its server on it),
+    // the requests it has (create-new-app's backends close their server on it),
     // and is killed after STOP_TIMEOUT_S if it doesn't exit; Caddy retries any
     // request that lands on it meanwhile.
     for (const name of old) {

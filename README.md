@@ -39,7 +39,7 @@ Caddy and Postgres run in containers, so the host only needs Docker, git and a d
 
 Caddy gets the Let's Encrypt certificate for `waynezhu.dev` on its own. `.dev` domains only load over HTTPS, so the Caddyfile always has a `waynezhu.dev` block; with no app at a path it serves a small "Nothing here" page.
 
-All apps share one origin, so they share cookies and browser storage. App backends set cookies with path `/api/<name>` so they only go to their own API; app-template handles the path prefixes.
+All apps share one origin, so they share cookies and browser storage. App backends set cookies with path `/api/<name>` so they only go to their own API; apps made with create-new-app handle the path prefixes.
 
 **3. Make a deploy key** on your own machine. This repo's CI uses it to SSH in (app repos don't; they go through the deployer):
 
@@ -83,7 +83,7 @@ cd ~/infrastructure && make health
 
 ## Adding a New Project
 
-Projects start from [app-template](https://github.com/waynezhu6/app-template). Two things decide what an app gets: a PR here **registers** it (puts it online and lets it deploy), and the app's own `infra.yml` says what it needs from the server.
+Projects are made with [create-new-app](https://github.com/waynezhu6/create-new-app) (`create-new-app <name> --backend ts|python --frontend web,ios`), which creates the app's repo and starts step 1 below for you. Two things decide what an app gets: a PR here **registers** it (puts it online and lets it deploy), and the app's own `infra.yml` says what it needs from the server.
 
 **1. Register it.** Either run Actions → **Register app** → Run workflow with the app's repo name (lowercase), or run it locally and open the PR yourself:
 
@@ -108,7 +108,7 @@ postgres: true   # its own database and role, and DATABASE_URL
 |---|---|---|
 | `postgres` | `false` | Creates a role and database named after the app (dashes become underscores: `my-app` → `my_app`), with a generated password, reachable only by that role, and adds its `DATABASE_URL` to `~/infrastructure/secrets/<name>.env`. |
 
-Without the file, or with `postgres: false`, nothing is created, but anything that already exists (a database from before, `DATABASE_URL` in the secrets file) is kept and still passed to the backend. Unknown settings or non-boolean values fail the deploy with a message, so a typo can't quietly skip a database. Changing only `infra.yml` redeploys even if the image is the same. app-template ships with `postgres: true`.
+Without the file, or with `postgres: false`, nothing is created, but anything that already exists (a database from before, `DATABASE_URL` in the secrets file) is kept and still passed to the backend. Unknown settings or non-boolean values fail the deploy with a message, so a typo can't quietly skip a database. Changing only `infra.yml` redeploys even if the image is the same. create-new-app's apps start with `postgres: true`.
 
 This repo is public so app repos, public or private, can use its deploy action. If it ever goes private, GitHub stops public repos from using its actions (their deploy fails with "Unable to resolve action `waynezhu6/infrastructure`"), and private ones need Settings → Actions → General → Access set to "Accessible from repositories owned by the user 'waynezhu6'".
 
@@ -153,7 +153,7 @@ What this asks of apps:
 
 - **Two versions run at once, briefly.** The new backend runs its migrations on startup while the old one is still serving, so a migration must not break the old code: add columns and tables freely; drop or rename only in a later deploy, once nothing uses them. Anything the app does on a timer runs in both containers for those seconds.
 - **Twice the memory during a deploy.** Both backends are up from the new one's start until the old one exits. Leave room for that on the server.
-- **Exit on SIGTERM.** app-template's backend stops taking connections, finishes what it has and exits. An app that ignores SIGTERM (Node running as PID 1 does, unless it handles it) keeps serving until it's killed after 30 s, and requests in flight at that moment fail.
+- **Exit on SIGTERM.** create-new-app's backends (TypeScript and Python) stop taking connections, finish what they have and exit. An app that ignores SIGTERM (Node running as PID 1 does, unless it handles it) keeps serving until it's killed after 30 s, and requests in flight at that moment fail.
 
 Containers from before blue-green deploys were called `<app>-backend`; the first deploy since adopts and replaces it the same way. If a deploy is cut off midway (the deployer restarting, say), the next one removes whatever it left.
 
@@ -165,7 +165,7 @@ Containers from before blue-green deploys were called `<app>-backend`; the first
 
 Restarting the deployer (any deploy of this repo that changes `deployer/`) waits for running deploys to finish first.
 
-Apps created before the deployer still deploy over SSH with `SERVER_HOST`, `SERVER_USER` and `SSH_DEPLOY_KEY` until their workflow and Dockerfile are updated from app-template; the first deploy through the deployer adopts the running container and replaces it.
+Apps created before the deployer still deploy over SSH with `SERVER_HOST`, `SERVER_USER` and `SSH_DEPLOY_KEY` until their workflow and Dockerfile are updated from create-new-app's template; the first deploy through the deployer adopts the running container and replaces it.
 
 ## Backups
 
