@@ -1,0 +1,33 @@
+# Root site. Registered by scripts/register-app.sh --root. App: __NAME__ (static files, no backend)
+# Imported inside the waynezhu.dev site block in the Caddyfile.
+#   waynezhu.dev/<anything else> -> the files in /srv/__NAME__
+# Every path no other route claims (/apps/<name>/, /api/<name>/, /deploy)
+# comes here: /about serves about, about.html or about/index.html. The app's
+# infra.yml has backend: false, so the deployer only publishes the files in
+# its image's /app/frontend/dist. There can be only one root site.
+
+handle {
+	root * /srv/__NAME__
+
+	# Paths with no file, including all of them before the first deploy, get
+	# the same "Nothing here" page as with no root site.
+	@missing not file {
+		root /srv/__NAME__
+		try_files {path} {path}.html {path}/index.html
+	}
+	handle @missing {
+		header Content-Type "text/html; charset=utf-8"
+		respond <<HTML
+			<!doctype html>
+			<html lang="en">
+			<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Not found</title>
+			<style>body{margin:0;min-height:100vh;display:grid;place-items:center;font:17px/1.5 system-ui,sans-serif;color:#555;background:#fbf9f4}@media(prefers-color-scheme:dark){body{color:#aaa;background:#1c1b19}}</style></head>
+			<body><p>Nothing here.</p></body>
+			</html>
+			HTML 404
+	}
+	encode gzip zstd
+	header Cache-Control "no-cache"
+	try_files {path} {path}.html {path}/index.html
+	file_server
+}
