@@ -196,7 +196,7 @@ test("an app without infra.yml or secrets gets only NODE_ENV and PORT", async ()
 });
 
 test("postgres: true creates the role and database and writes DATABASE_URL", async () => {
-  const { infraDir, dataDir, run, pg } = setup({ manifest: { postgres: true } });
+  const { infraDir, dataDir, run, pg } = setup({ manifest: { postgres: true, monitor: true } });
   writeFileSync(join(infraDir, "secrets", "reader.env"), "READER_KEY=k");
   const job = await run();
   assert.equal(job.status, "succeeded", job.lines.join("\n"));
@@ -214,7 +214,7 @@ test("postgres: true creates the role and database and writes DATABASE_URL", asy
 });
 
 test("postgres: true on an app that already has it changes nothing", async () => {
-  const { infraDir, run, pg } = setup({ manifest: { postgres: true }, pg: { roles: new Set(["reader"]), databases: new Set(["reader"]) } });
+  const { infraDir, run, pg } = setup({ manifest: { postgres: true, monitor: true }, pg: { roles: new Set(["reader"]), databases: new Set(["reader"]) } });
   writeFileSync(join(infraDir, "secrets", "reader.env"), "DATABASE_URL=postgres://reader:pw@postgres:5432/reader\n");
   const job = await run();
   assert.equal(job.status, "succeeded", job.lines.join("\n"));
@@ -223,7 +223,7 @@ test("postgres: true on an app that already has it changes nothing", async () =>
 });
 
 test("a role whose password was lost fails the deploy before anything starts", async () => {
-  const { infraDir, calls, run } = setup({ manifest: { postgres: true }, pg: { roles: new Set(["reader"]) } });
+  const { infraDir, calls, run } = setup({ manifest: { postgres: true, monitor: true }, pg: { roles: new Set(["reader"]) } });
   rmSync(join(infraDir, "secrets", "reader.env"));
   const job = await run();
   assert.equal(job.status, "failed");
@@ -238,7 +238,7 @@ test("dashes in app names become underscores in Postgres", async () => {
     sql.push(args.at(-1)!);
     return { code: 0, stdout: "" };
   };
-  await provision(exec, infraDir, new Job({ app: "notes-api", digest, repository: "r", sha: "s", runId: "1", env: {} }), "notes-api", { postgres: true });
+  await provision(exec, infraDir, new Job({ app: "notes-api", digest, repository: "r", sha: "s", runId: "1", env: {} }), "notes-api", { postgres: true, monitor: true });
   assert.ok(sql.includes('CREATE DATABASE "notes_api" OWNER "notes_api"'), sql.join("\n"));
   assert.match(readFileSync(join(infraDir, "secrets", "notes-api.env"), "utf8"), /^DATABASE_URL=postgres:\/\/notes_api:[0-9a-f]+@postgres:5432\/notes_api\n$/);
 });

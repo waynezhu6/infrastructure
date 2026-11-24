@@ -3,17 +3,18 @@ import assert from "node:assert/strict";
 import { describe, ManifestError, parseManifest } from "../src/manifest.js";
 
 test("reads what an app declares", () => {
-  assert.deepEqual(parseManifest("# notes\npostgres: true\n"), { postgres: true });
-  assert.deepEqual(parseManifest("postgres: false"), { postgres: false });
+  assert.deepEqual(parseManifest("# notes\npostgres: true\n"), { postgres: true, monitor: true });
+  assert.deepEqual(parseManifest("postgres: false"), { postgres: false, monitor: true });
+  assert.deepEqual(parseManifest("monitor: false"), { postgres: false, monitor: false });
 });
 
 test("an empty file declares nothing", () => {
-  assert.deepEqual(parseManifest(""), { postgres: false });
-  assert.deepEqual(parseManifest("# nothing yet\n"), { postgres: false });
+  assert.deepEqual(parseManifest(""), { postgres: false, monitor: true });
+  assert.deepEqual(parseManifest("# nothing yet\n"), { postgres: false, monitor: true });
 });
 
 test("refuses unknown settings, wrong types and broken YAML", () => {
-  assert.throws(() => parseManifest("postgress: true"), /unknown setting "postgress"; known: postgres/);
+  assert.throws(() => parseManifest("postgress: true"), /unknown setting "postgress"; known: postgres, monitor/);
   assert.throws(() => parseManifest("postgres: yes please"), /postgres must be true or false/);
   assert.throws(() => parseManifest('postgres: "true"'), /must be true or false/);
   assert.throws(() => parseManifest("- postgres"), /must be a map/);
@@ -21,6 +22,6 @@ test("refuses unknown settings, wrong types and broken YAML", () => {
 });
 
 test("describes a manifest for the deploy log", () => {
-  assert.equal(describe({ postgres: true }), "postgres");
-  assert.equal(describe({ postgres: false }), "nothing");
+  assert.equal(describe({ postgres: true, monitor: true }), "postgres, monitor");
+  assert.equal(describe({ postgres: false, monitor: false }), "nothing");
 });

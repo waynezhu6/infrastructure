@@ -12,13 +12,21 @@ stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+# healthchecks.io: BACKUP_PING_URL if set, otherwise the "backup" check under
+# HC_PING_KEY (made on its first ping), as the monitor reports (monitor/).
+ping_url="${BACKUP_PING_URL:-}" create=""
+if [ -z "$ping_url" ] && [ -n "${HC_PING_KEY:-}" ]; then
+  ping_url="https://hc-ping.com/$HC_PING_KEY/backup" create="?create=1"
+fi
 ping() {
-  [ -n "${BACKUP_PING_URL:-}" ] || return 0
-  wget -q -T 10 -O /dev/null "${BACKUP_PING_URL}$1" || true
+  [ -n "$ping_url" ] || return 0
+  wget -q -T 10 -O /dev/null "${ping_url}$1${create}" || true
 }
 trap 'ping /fail' ERR
 
 echo "==> Backup $stamp"
+# Lets healthchecks.io show how long each backup takes.
+ping /start
 pg_dumpall --clean --if-exists | gzip > "$work/postgres.sql.gz"
 tar -C "${INFRA_DIR:-/infra}" -czf "$work/secrets.tar.gz" secrets
 tar -C "$work" -cf "$work/archive.tar" postgres.sql.gz secrets.tar.gz

@@ -20,3 +20,6 @@ deploys/
 
 # Backups, written by the backup container on the server
 backups/
+
+# Caddy access logs, read by the monitor
+logs/

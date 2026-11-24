@@ -6,13 +6,17 @@ import { parse } from "yaml";
 // removed: setting a resource back to false only stops creating it.
 //
 //   postgres: true    a database and role of its own, and DATABASE_URL
+//   monitor: false    leave it out of the monitor's health checks (monitor/);
+//                     on by default. The monitor reads it from the app's
+//                     deploy state, so the deployer only validates it.
 export interface Manifest {
   postgres: boolean;
+  monitor: boolean;
 }
 
 export const MANIFEST_FILE = "infra.yml";
 
-const DEFAULTS: Manifest = { postgres: false };
+const DEFAULTS: Manifest = { postgres: false, monitor: true };
 
 export class ManifestError extends Error {}
 

@@ -12,6 +12,9 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./apps:/etc/caddy/apps:ro
       - ./sites:/srv:ro
+      # Access logs, trimmed to what counting needs (Caddyfile), read by the
+      # monitor.
+      - ./logs/caddy:/var/log/caddy
       - caddy_data:/data
       - caddy_config:/config
     networks:
@@ -102,6 +105,7 @@ services:
       BACKUP_PASSPHRASE: ${BACKUP_PASSPHRASE:-}
       BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
       BACKUP_PING_URL: ${BACKUP_PING_URL:-}
+      HC_PING_KEY: ${HC_PING_KEY:-}
       # The offsite bucket, as an rclone remote named "offsite". Any
       # S3-compatible store works; Backblaze B2 is the one set up.
       RCLONE_CONFIG_OFFSITE_TYPE: s3
@@ -115,6 +119,25 @@ services:
       - ./secrets:/infra/secrets:ro
     networks:
       - postgres-db
+
+  # Checks every deployed app's /api/health and Caddy's request counts each
+  # minute and reports to healthchecks.io (monitor/, README "Monitoring").
+  # HC_PING_KEY comes from this repo's Actions secrets, via .env; with none
+  # set it only logs failures.
+  monitor:
+    build: ./monitor
+    container_name: monitor
+    restart: unless-stopped
+    environment:
+      HC_PING_KEY: ${HC_PING_KEY:-}
+      TRAFFIC_LIMIT_PER_MINUTE: "300"
+    volumes:
+      - ./apps:/infra/apps:ro
+      # Each app's deploy state, for its infra.yml's monitor setting.
+      - ./deploys:/deploys:ro
+      - ./logs/caddy:/logs:ro
+    networks:
+      - caddy-web
 
 # Named volumes for data persistence
 volumes:
